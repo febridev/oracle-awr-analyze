@@ -51,3 +51,9 @@ def build_padded(src, out_dir, min_bytes):
     p = pathlib.Path(out_dir) / "padded.html"
     p.write_text(html[:end] + rows * n + html[end:])
     return p
+
+
+@pytest.fixture(scope="session")
+def cfg():
+    from common import load_config
+    return load_config(None)

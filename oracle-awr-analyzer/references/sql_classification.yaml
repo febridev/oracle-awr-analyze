@@ -1,0 +1,19 @@
+# Defaults come from PRD section 8 calibration; edit here or override via --config.
+# All entries are case-insensitive regex strings.
+monitoring_modules: ['^OEM', 'emagent', 'zabbix', 'prometheus', 'nagios', '^dbspicao']
+monitoring_programs: ['dbspicao11']
+maintenance_modules: ['^DBMS_SCHEDULER$', 'rman', '^Data Pump', '^DW\d+', '^DM\d+']
+internal_modules: ['^MMON_SLAVE', '^MMNL', '^MMON']
+adhoc_modules: ['SQL Developer', '^TOAD', 'PL/SQL Developer']
+generic_modules: ['JDBC Thin Client', '^SQL\*Plus', '^python']
+oracle_process_programs: ['^oracle$', '^ora_']
+app_programs: ['APPSRV', 'APPWORKER', 'APPBATCH']
+app_hosts: []
+app_table_prefixes: ['APP_', 'ORD_', 'LCK_']
+user_schemas: []
+monitoring_schemas: []
+text_patterns:
+  maintenance: ['DBMS_STATS', '/\*\s*SQL Analyze\(']
+  internal: ['\bWRI\$_', '\bWRH\$_', '\bSYS\.\w+\$']
+  heartbeat: ['^\s*select\s+1\s+from\s+dual\s*$']
+  dictionary_objects: ['^(G?V\$|DBA_|X\$|ALL_|CDB_|SYS\.)']
