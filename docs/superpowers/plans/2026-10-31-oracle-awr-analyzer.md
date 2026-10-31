@@ -190,7 +190,7 @@ def test_unparseable_date_kept_raw():
     assert to_iso("2026/10/28 x") == "2026/10/28 x"
     assert to_iso("28-Oct 01:00:48", year_hint=2026) == "2026-10-28T01:00:48"
 ```
-conftest gains `sample_path` = `Path(__file__).parents[2] / "examples/awrrpt_1_3138_3162.html"`.
+(`sample_path` already exists in conftest from Task 1: `Path(__file__).parents[2] / "examples/awrrpt_1_3138_3162.html"`.)
 
 - [ ] **Step 3: Run to verify failure** — `.venv/bin/pytest oracle-awr-analyzer/scripts/tests/test_parse_header.py -v` → FAIL (ImportError).
 
@@ -299,6 +299,7 @@ def test_extractor_tolerates_extra_and_missing_columns(tmp_path, sample_path):
   - `segments: {"by_logical_reads","by_physical_reads","by_row_lock_waits","by_buffer_busy_waits"}` (records).
   - `activity: {slug(statistic): {"total","per_s","per_txn"}}` from "Instance activity statistics" (the full one).
   - `parameters: {name: {"begin","end"}}`.
+  - `split_module(module: str | None) -> dict` → `{"program": str|None, "client_host": str|None}` (used by Task 5 tests).
   - `parse(path: Path) -> dict` (full `awr.json` dict incl. `missing_sections`, `invalid_values`), `make_run_dir(parent: Path, meta: dict) -> Path`, and CLI `parse_awr.py <awr.html> [--out PARENT]` printing the run dir path; exit 2 on `NotAwrError`, 3 on `UnsupportedFormatError`.
 
 - [ ] **Step 1: Write failing tests**
@@ -346,7 +347,7 @@ def test_truncated_file(tmp_path, sample_path):
     code, run = run_parse(p, tmp_path)
     awr = json.loads((run / "awr.json").read_text())
     assert code == 0 and awr["meta"]["db_name"] == "PRODDB"
-    assert {"parameters", "sql_text"} <= {m["section"] for m in awr["missing_sections"]}
+    assert {"parameters", "pga_hist", "activity"} <= {m["section"] for m in awr["missing_sections"]}   # all three start after the 50% cut
 
 def test_benchmark_20mb(tmp_path, sample_path):        # A9; mark @pytest.mark.slow
     # pad the Complete List of SQL Text table with copies of its own rows until file >= 20 MB
@@ -411,7 +412,7 @@ CLS = load_config(None)["classification"]; DB = "db-host-01"
     ("JDBC Thin Client", "select * from orders", "unknown", "low"),
 ])
 def test_calibration(module, text, cat, conf):
-    r = classify({"sql_id": "x", "module": module, "text": text, **split(module)}, DB, CLS)  # split(): conftest helper using parse_awr's module regex
+    r = classify({"sql_id": "x", "module": module, "text": text, **split_module(module)}, DB, CLS)  # from parse_awr import split_module
     assert (r["category"], r["confidence"]) == (cat, conf)
     assert r["reasons"] and r["verify_sql"] == "V-01"
 
@@ -427,6 +428,8 @@ def test_dba_list_wins():
   - `client_host == db_host` and program not Oracle → strong `monitoring`; `client_host` in `app_hosts` or `program` in `app_programs` → strong `user_app`.
   - Text: maintenance/internal patterns → strong; heartbeat → weak `monitoring`; all extracted objects dictionary → strong `monitoring`; any object with an app prefix or `user_schemas` owner → strong `user_app`.
   - Object extraction: regex on identifiers after `FROM|JOIN|INTO|UPDATE` plus `GV$`/`V$` inside `CURSOR(`; comment `shortcut: misses dynamic SQL and quoted identifiers; upgrade if A5 accuracy < 90%`.
+  - **Definitive signals** (count as `explicit` strength → `high`): `adhoc_modules` match (an interactive tool names itself) and `text_patterns.internal` match (Oracle-owned WRI$/WRH$/SYS.x$ objects) — required by calibration cases `SQL Developer`→adhoc high and `wri$_adv_objects`→oracle_internal high. Exception: an internal-pattern hit loses to a monitoring module/host signal (case 1: `SYS.FILEXT$` under `dbspicao11` stays monitoring).
+  - DBA lists: `load_config` keeps user-config lists under `classification["dba"]` (same key names); only those are `explicit`. Built-in YAML lists are `strong`.
   - Category = signal from the highest-priority group in order explicit > module > host > text > object; if only weak signals → that weak category with low, except generic-only → `unknown`.
   - Confidence: explicit, or ≥2 signals agreeing with the category → `high`; one strong → `medium`; weak only → `low`.
 - [ ] **Step 5: Run tests** — Expected: 13 passed. If a calibration case disagrees, fix the rule, not the test.
@@ -529,7 +532,7 @@ def test_fill():
    "bottleneck": "cpu_bound" | "wait_bound" | "mixed" | "non_db_host_load" | "db_not_problem",
    "top_wait_class": str | None, "hyperthreading": bool, "idle": bool}
   ```
-  Status names: `Idle`, `Normal`, `Busy`, `Saturated`, `Critical`.
+  Status names: `Idle`, `Normal`, `Busy`, `Saturated`, `Critical`. Bands are lower-inclusive: ratio < 0.10 Idle, < 0.50 Normal, < 1.00 Busy, < 2.00 Saturated, ≥ 2.00 Critical (matches PRD §7 P0 `≥ 2,0`).
 
 - [ ] **Step 1: Write the `load:` section of `thresholds.yaml`**
 
@@ -551,7 +554,7 @@ load:
 def test_sample_load(sample_awr, cfg):
     L = load_status(sample_awr, cfg["thresholds"])
     assert L["avg"]["aas"] == 7.12 and L["avg"]["load_ratio"] == 0.21 and L["avg"]["status"] == "Normal"
-    assert L["peak"] == {"aas": 31.79, "load_ratio": 0.94, "status": "Busy", "begin": "2026-10-28T22:00:00",
+    assert L["peak"] == {"aas": 31.79, "load_ratio": 0.93, "status": "Busy", "begin": "2026-10-28T22:00:00",
                          "end": "2026-10-28T23:00:00", "source": "addm", "os_busy_pct": 26.57, "os_iowait_pct": 14.49}  # OS Detail row 28-Oct 23:00:52
     assert L["basis"] == "peak" and L["bottleneck"] == "wait_bound" and L["top_wait_class"] == "User I/O"
 
@@ -604,7 +607,7 @@ Rounding rule: `aas` and `load_ratio` stored rounded to 2 decimals; all later ru
 | cpu.load.p1 | basis load_ratio ≥ 1.0 and host idle < 10 | P1 | yes | V-04, V-05 |
 | cpu.load.p0 | basis load_ratio ≥ 2.0 and host idle < 5 | P0 | yes | V-04, V-05 |
 | cpu.resmgr.p2 | fg `resmgr:cpu quantum` pct ≥ 5 | P2 | yes | V-05 |
-| mem.swap.p1 | `os_stats.VM_OUT_BYTES.value` > 0 | P1 | no | V-06 |
+| mem.swap.p1 / .p3 | swap-out rate = `os_stats.VM_OUT_BYTES.value` / 1048576 / (`elapsed_min`/60) MB/h; ≥ `swap_out_mb_per_hour` (default 10) → P1; > 0 but below → P3 (minor swap-out; verify trend with V-06). Rate written to `derived.swap_out_mb_per_hour` (2 decimals) | P1 / P3 | no | V-06 |
 | mem.sga_pga.p2 | `memory.pct_host_mem_used_for_sga_pga.end` > 90 | P2 | no | V-06, V-16 |
 | mem.multipass.p3 | `pga.multipass_execs` > 0 | P3 | no | V-06 |
 | io.seq_read.warn / .crit | `db file sequential read` avg ms ≥ {flash 3, hdd 10, san 10} / {flash 8, hdd 20, san 20} | P2 / P1 | yes | V-07, V-08, V-09 |
@@ -625,7 +628,7 @@ Rounding rule: `aas` and `load_ratio` stored rounded to 2 decimals; all later ru
 | config.param.p4 | any modified parameter starting `_` or in `watch_params` | P4 | no | V-15 |
 | config.sga_advisory.p4 | SGA advisory row with size factor > 1 and est DB time ≤ 90% of factor-1.0 row | P4 | no | V-16 |
 
-Also in YAML: `event_share_exclude: ["control file sequential read"]` (it has its own P3 rule, per PRD §9 calibration 3); `min_pct_db_time: 1.0`; `watch_params: [optimizer_mode, optimizer_index_cost_adj, optimizer_features_enable, cursor_sharing, db_file_multiblock_read_count]`; `idle_events` (exact names or `prefix*`): `SQL*Net message from client`, `rdbms ipc message`, `pmon timer`, `smon timer`, `jobq slave wait`, `Streams AQ:*`, `class slave wait`, `PL/SQL lock timer`, `Space Manager: slave idle wait`, `wait for unread message on broadcast channel`, `LGWR worker group idle`, `watchdog main loop`, `pipe get`, `heartbeat redo informer`, `lreg timer`, `AQPC idle`, `fbar timer`, `VKTM Logical Idle Wait`, `DIAG idle wait`, `Data Guard: Timer`, `shared server idle wait`, `dispatcher timer`, `virtual circuit next request`; `latency_events: {"db file sequential read": io.seq_read, "db file scattered read": io.multi_read, "direct path read": io.multi_read, "log file sync": redo.lfs}`.
+Also in YAML: `swap_out_mb_per_hour: 10`; `event_share_exclude: ["control file sequential read"]` (it has its own P3 rule, per PRD §9 calibration 3); `min_pct_db_time: 1.0`; `watch_params: [optimizer_mode, optimizer_index_cost_adj, optimizer_features_enable, cursor_sharing, db_file_multiblock_read_count]`; `idle_events` (exact names or `prefix*`): `SQL*Net message from client`, `rdbms ipc message`, `pmon timer`, `smon timer`, `jobq slave wait`, `Streams AQ:*`, `class slave wait`, `PL/SQL lock timer`, `Space Manager: slave idle wait`, `wait for unread message on broadcast channel`, `LGWR worker group idle`, `watchdog main loop`, `pipe get`, `heartbeat redo informer`, `lreg timer`, `AQPC idle`, `fbar timer`, `VKTM Logical Idle Wait`, `DIAG idle wait`, `Data Guard: Timer`, `shared server idle wait`, `dispatcher timer`, `virtual circuit next request`; `latency_events: {"db file sequential read": io.seq_read, "db file scattered read": io.multi_read, "direct path read": io.multi_read, "log file sync": redo.lfs}`.
 
 Note: `wait_class` is absent from the 19c fg events table, so idle detection uses `idle_events` plus the class from `top_events` when the event appears there (`wait_class == "Idle"`).
 
@@ -706,6 +709,7 @@ def test_sample_findings(sample_run):
     assert sev[("redo", "log switches")] == "P2"                   # 24.13/h > 20
     assert sev[("events", "control file sequential read")] == "P3"
     assert sev[("parse", "execute to parse")] == "P3"              # 2.75 < 50, soft 99.98 > 95
+    assert sev[("memory", "swap")] == "P3"                         # VM_OUT 27,025,408 B / 24 h ≈ 1.07 MB/h < 10
     assert sev[("monitoring", "monitoring overhead")] == "P2"
     assert f["sql_summary"]["monitoring_overhead_pct"] >= 11.18    # 85gj 7.47 + 2tc4 1.33 + cmu8 1.29 + 1f8d 1.09
     assert not any(x["severity"] in ("P0", "P1") for x in f["findings"])
