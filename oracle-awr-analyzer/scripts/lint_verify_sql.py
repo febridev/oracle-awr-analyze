@@ -49,7 +49,7 @@ def lint_query(q: dict) -> list:
     errs = [f"missing header: {h}" for h in REQUIRED if h not in q]
     if q.get("license", "none") not in LICENSES:
         errs.append(f"bad license: {q['license']}")
-    sql = q.get("sql", "")
+    sql = q.get("sql", "").replace("\r\n", "\n").replace("\r", "\n")  # SQL*Plus treats \r as a line break
     no_comments = _COMMENT_OR_STR.sub(lambda m: " " if m.group(0)[:2] in ("--", "/*") else m.group(0), sql)
     bare = _COMMENT_OR_STR.sub(" ", sql)
     marked = _COMMENT_OR_STR.sub(" x ", sql)  # placeholder keeps comment-only lines non-blank
@@ -58,6 +58,8 @@ def lint_query(q: dict) -> list:
         errs.append("more than one statement (';' only allowed at the end)")
     if re.search(r"(?m)^[ \t]*/[ \t]*$", bare):
         errs.append("line consisting only of '/' is forbidden")
+    if re.search(r"(?m)^[ \t]*(\.|#.*)$", bare):
+        errs.append("line that is only '.' or starts with '#' is forbidden")
     if re.search(r"\n[ \t\r]*\n", marked.strip()):
         errs.append("blank line inside statement is forbidden")
     if not re.match(r"\s*(SELECT|WITH)\b", bare, re.I):
@@ -82,13 +84,15 @@ def fill(q: dict, values: dict) -> str:
     for p in q["params"]:
         v = str(values[p])
         if p in _INT_PARAMS:
-            if not re.fullmatch(r"\d+", v.strip()):
+            if not re.fullmatch(r"[0-9]+", v.strip()):
                 raise ValueError(f"{p} must be an integer: {v!r}")
             v = v.strip()
         elif p == "sql_id":
             if not re.fullmatch(r"[0-9a-z]{13}", v):
                 raise ValueError(f"sql_id must match [0-9a-z]{{13}}: {v!r}")
         else:
+            if re.search(r"[\x00-\x1f\x7f]", v):
+                raise ValueError(f"{p} contains control characters")
             v = v.replace("'", "''")
         sql = re.sub(rf"&{p}\b", lambda _m, v=v: v, sql)
     errs = lint_query(dict(q, sql=sql, params=[]))

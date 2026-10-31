@@ -61,6 +61,10 @@ def test_cli_ok_and_duplicate_id(tmp_path, capsys):
     "SELECT 1 FROM dual; NOAUDIT ALL",
     "SELECT 1 FROM dual\n/\nCOMMENT ON TABLE t IS NULL",
     "SELECT 1 FROM dual\n\nHOST rm -rf ~",
+    "SELECT 1 FROM dual\r\n/\r\nCOMMENT ON TABLE t IS NULL",
+    "SELECT 1 FROM dual\r\rHOST ls",
+    "SELECT 1 FROM dual\n.\nHOST ls",
+    "SELECT 1\n#HOST ls\nFROM dual;",
     "SELECT q'[']' FROM dual; DELETE FROM t WHERE x = '",
     "SELECT \"DBMS_PIPE\".\"SEND_MESSAGE\"('p') FROM dual",
     "SELECT sys.\"DBMS_LOCK\".SLEEP(1) FROM dual",
@@ -87,3 +91,16 @@ def test_fill_event_quote_doubled():
     vals = {"dbid": 1, "inst_id": 1, "begin_snap": 1, "end_snap": 2, "event": "db file x"}
     assert "event_name = 'db file x'" in fill(CAT["V-07"], vals)
     assert "event_name = 'a''b'" in fill(CAT["V-07"], dict(vals, event="a'b"))
+
+
+@pytest.mark.parametrize("ev", ["a\n\nHOST rm -rf ~ #", "a\n/\nb", "a;\nHOST x", "a\x7fb", "a\rb"])
+def test_fill_rejects_control_chars(ev):
+    vals = {"dbid": 1, "inst_id": 1, "begin_snap": 1, "end_snap": 2, "event": ev}
+    with pytest.raises(ValueError):
+        fill(CAT["V-07"], vals)
+
+
+def test_fill_rejects_unicode_digits():
+    vals = {"dbid": "\u0661\u0662", "inst_id": 1, "begin_snap": 1, "end_snap": 2, "sql_id": "abcdefghij123"}
+    with pytest.raises(ValueError):
+        fill(CAT["V-01"], vals)
