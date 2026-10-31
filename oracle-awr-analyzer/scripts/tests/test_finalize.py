@@ -108,3 +108,22 @@ def test_diff_rules(cfg):
     c2["workload_norms"] = {"executes_per_s": 100}
     a["load_profile"] = {"executes_sql": {"per_s": 500}}
     assert diff_decision([], sat, a, c2, False)["suggested"] is False
+
+
+def test_quiet_period_blocks_escalation_and_lowers_all_load_based(cfg):
+    a = fixture("idle")
+    a["meta"].update({k: v for k, v in awr()["meta"].items() if k not in a["meta"]})
+    a["sql"] = [{"sql_id": "abcdefghij123", "by_user_io": {"pct_total": 5}, "category": "user_app", "confidence": "high"}]
+    L = load_status(a, cfg["thresholds"])
+    f = fin([cand("sql.single.p3", "P3", "abcdefghij123", "sql"), cand("io.seq_read.crit", "P1"),
+             cand("event.share.p2", "P3", "other", "events")], cfg, a, L)
+    by = {x["subject"]: x for x in f}
+    assert (by["abcdefghij123"]["severity"], by["abcdefghij123"]["confidence"]) == ("P3", "low")
+    assert by["other"]["confidence"] == "low"
+    assert by["db file sequential read"]["severity_adjustments"]
+
+
+def test_severity_adjustments_recorded(cfg):
+    f = fin([cand("event.share.p1", "P1", pct=35, lat=True)], cfg)[0]
+    assert "volume" in f["severity_adjustments"][0]
+    assert fin([cand("config.param.p4", "P4", "x", "config", None, False)], cfg)[0]["severity_adjustments"] == []

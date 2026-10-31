@@ -269,7 +269,7 @@ rules:
     load_based: true
     event: control file sequential read
     pct_min: 5
-    verify_sql: [V-07, V-01]
+    verify_sql: [V-07]
     fallback:
       cause: Control file reads take a noticeable share of time. This is often background work such as backups, archiving or many sessions checking the control file.
       impact: Normally harmless, but a high share can mean frequent control file access caused by a job or a tool.

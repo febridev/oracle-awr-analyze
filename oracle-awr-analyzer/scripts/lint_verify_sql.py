@@ -110,7 +110,7 @@ def lint_thresholds(thr: dict, catalog: dict) -> list:
 
 
 def lint_run(findings: dict, catalog: dict) -> list:
-    """Every available verify query in findings.json must be its catalog query with only parameters substituted."""
+    """Every available verify query must equal fill(catalog query, its recorded params), exactly."""
     by_id = {q.get("id"): q for q in catalog.values()}
     errs = []
     for f in findings.get("findings") or []:
@@ -121,8 +121,12 @@ def lint_run(findings: dict, catalog: dict) -> list:
             if q is None:
                 errs.append(f"{f['id']}: {v['id']} not in catalog")
                 continue
-            pat = re.sub(r"\\&(\w+)", "(?s:.+?)", re.escape(q["sql"]))  # shortcut: parameter text may contain anything; fill() already validated it
-            if not re.fullmatch(pat, v.get("sql") or ""):
+            try:
+                ok = fill(q, v.get("params") or {}) == v.get("sql")
+            except (ValueError, KeyError) as ex:
+                errs.append(f"{f['id']}: {v['id']} cannot be refilled: {ex}")
+                continue
+            if not ok:
                 errs.append(f"{f['id']}: {v['id']} SQL does not match the catalog")
     return errs
 

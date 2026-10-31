@@ -346,7 +346,7 @@ def _merge(cands):
     for c in cands:
         f = out.setdefault((c["domain"], c["subject"]), {
             "domain": c["domain"], "subject": c["subject"], "title": c["title"], "severity": c["severity"],
-            "triggered_by": [], "load_based": False, "evidence": [], "pct_db_time": None, "latency_ok": False,
+            "triggered_by": [], "severity_adjustments": [], "load_based": False, "evidence": [], "pct_db_time": None, "latency_ok": False,
             "confidence": None})
         if c["severity"] < f["severity"]:
             f["severity"], f["title"] = c["severity"], c["title"]
@@ -391,7 +391,8 @@ def _verify(f, rule_ids, awr, t, catalog):
     have, vals, out = _ver(awr["meta"].get("release")), _vals(f, awr), []
     for vid in dict.fromkeys(v for r in rule_ids for v in t["rules"][r].get("verify_sql") or []):
         q = by_id.get(vid)
-        e = {"id": vid, "title": q and q.get("title"), "sql": None, "license": q and q.get("license"), "available": False}
+        e = {"id": vid, "title": q and q.get("title"), "sql": None, "license": q and q.get("license"), "available": False,
+             "params": {}}
         if q is None:
             e["reason"] = "not in the verification catalog"
         elif have and have < _ver(q.get("min_version")):
@@ -401,6 +402,7 @@ def _verify(f, rule_ids, awr, t, catalog):
         else:
             try:
                 e["sql"], e["available"] = fill(q, vals), True
+                e["params"] = {p: vals[p] for p in q["params"]}
             except ValueError as ex:  # R13: never emit unfilled or unsafe text
                 e["reason"] = f"cannot fill safely: {ex}"
         out.append(e)
@@ -418,17 +420,25 @@ def finalize(cands: list, awr: dict, L: dict, cfg: dict, catalog: dict) -> list:
     elapsed = meta.get("elapsed_min")
     quiet = L["idle"] or (elapsed is not None and elapsed < t["load"]["short_period_min"])
     for f in fs:
-        f["capped"] = False
-        if quiet and f["load_based"] and f["severity"] < "P3":
-            f["severity"], f["confidence"], f["capped"] = "P3", "low", True
+        if quiet and f["load_based"]:
+            f["confidence"] = "low"
+            if f["severity"] < "P3":
+                f["severity"] = "P3"
+                f["severity_adjustments"].append(
+                    f"capped to P3: database idle or period under {t['load']['short_period_min']} minutes")
         elif f["latency_ok"] and f["severity"] < "P2":  # big share, healthy latency: volume, not storage
             f["severity"] = "P2"
+            f["severity_adjustments"].append(
+                "capped to P2: high share of DB time with healthy latency - a volume problem, not storage; "
+                "see SQL ordered by User I/O Wait Time and Segments by Physical Reads")
     # 4. escalation
-    io_crit = any(r.endswith(".crit") and f["domain"] == "io" for f in fs for r in f["triggered_by"])
+    crit_ev = [f["subject"] for f in fs if f["domain"] == "io" and any(r.endswith(".crit") for r in f["triggered_by"])]
     user_io = {s["sql_id"] for s in awr.get("sql") or [] if s.get("by_user_io")}
     for f in fs:
-        if io_crit and f["domain"] == "sql" and f["subject"] in user_io and not f["capped"]:
+        if crit_ev and f["domain"] == "sql" and f["subject"] in user_io and not (quiet and f["load_based"]):
             f["severity"] = _SEV[max(_SEV.index(f["severity"]) - 1, 0)]
+            f["severity_adjustments"].append(f"raised to {f['severity']}: SQL is a top User I/O consumer while "
+                                             f"{crit_ev[0]} is past its critical latency")
     # 5. confidence (restart → low), 6. sort + number
     for f in fs:
         if not f["confidence"]:
@@ -436,7 +446,7 @@ def finalize(cands: list, awr: dict, L: dict, cfg: dict, catalog: dict) -> list:
         f["triggered_by"].sort(key=lambda r: t["rules"][r]["severity"])
         f["verify_sql"] = _verify(f, f["triggered_by"], awr, t, catalog)
         f["fallback"] = t["rules"][f["triggered_by"][0]]["fallback"]
-        del f["capped"], f["latency_ok"]
+        del f["latency_ok"]
     fs.sort(key=lambda f: (f["severity"], -(f["pct_db_time"] or 0), f["subject"]))
     for i, f in enumerate(fs, 1):
         f["id"] = f"F{i:02d}"

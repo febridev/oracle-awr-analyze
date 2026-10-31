@@ -126,8 +126,18 @@ def test_unknown_rule_verify_id():
 def test_run_sql_must_match_catalog():
     from lint_verify_sql import lint_run
     vals = {"dbid": 1, "inst_id": 1, "begin_snap": 1, "end_snap": 2, "sql_id": "abcdefghij123"}
-    ok = {"findings": [{"id": "F01", "verify_sql": [{"id": "V-01", "available": True, "sql": fill(CAT["V-01"], vals)},
-                                                    {"id": "V-02", "available": False, "sql": None}]}]}
-    assert lint_run(ok, CAT) == []
-    bad = {"findings": [{"id": "F01", "verify_sql": [{"id": "V-01", "available": True, "sql": "SELECT 1 FROM dual"}]}]}
-    assert len(lint_run(bad, CAT)) == 1
+    ent = {"id": "V-01", "available": True, "sql": fill(CAT["V-01"], vals), "params": vals}
+    run = lambda e: {"findings": [{"id": "F01", "verify_sql": [e, {"id": "V-02", "available": False, "sql": None}]}]}
+    assert lint_run(run(ent), CAT) == []
+    assert len(lint_run(run(dict(ent, sql="SELECT 1 FROM dual")), CAT)) == 1
+
+
+def test_run_rejects_tampered_sql():
+    from lint_verify_sql import lint_run
+    vals = {"dbid": 1, "inst_id": 1, "begin_snap": 1, "end_snap": 2, "event": "x"}
+    sql = fill(CAT["V-07"], vals)
+    for bad in (sql.replace("event_name = 'x'", "event_name = 'x' UNION ALL SELECT 1 FROM sys.user$ WHERE 'a'='a'"),
+                sql.replace("dbid = 1", "dbid = 1 OR 1=1")):
+        assert bad != sql
+        e = {"id": "V-07", "available": True, "sql": bad, "params": vals}
+        assert len(lint_run({"findings": [{"id": "F01", "verify_sql": [e]}]}, CAT)) == 1

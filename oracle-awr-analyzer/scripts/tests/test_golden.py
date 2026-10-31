@@ -38,3 +38,8 @@ def test_sample_findings(sample_run):
     assert f["diff"]["suggested"] is False
     assert all(x["evidence"] and x["verify_sql"] and x["triggered_by"] for x in f["findings"])   # A4
     assert any("storage" in n for n in f["notes"])                 # san assumed
+    adj = {x["subject"]: x["severity_adjustments"] for x in f["findings"]}
+    for ev in ("db file sequential read", "direct path read"):
+        assert adj[ev] and "volume" in adj[ev][0]
+    ctrl = next(x for x in f["findings"] if x["subject"] == "control file sequential read")
+    assert all(v["available"] for v in ctrl["verify_sql"])
