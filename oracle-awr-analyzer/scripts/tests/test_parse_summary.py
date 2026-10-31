@@ -65,3 +65,11 @@ def test_non_parse_cpu_checked(tmp_path, sample_path):
     html = sample_path.read_text().replace("  99.63<", "  199.63<", 1)
     ctx = make_ctx(tmp_path, html)
     assert extract_efficiency(ctx)["pct_non_parse_cpu"] is None
+
+
+def test_memory_pct_checked(tmp_path, sample_path):
+    html = sample_path.read_text()
+    assert "47.80<" in html
+    ctx = make_ctx(tmp_path, html.replace("47.80<", "147.80<", 1))
+    assert extract_memory(ctx)["pct_host_mem_used_for_sga_pga"]["end"] is None
+    assert any(i["path"] == "memory.pct_host_mem_used_for_sga_pga.end" for i in ctx.invalid)

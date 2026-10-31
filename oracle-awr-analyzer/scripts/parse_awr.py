@@ -221,8 +221,7 @@ class Ctx:
     def val(self, path: str, text: Optional[str], unit: Optional[str] = None) -> Optional[float]:
         """Parse a number; null + invalid entry if negative, or outside 0-100 for percentages."""
         v = num(text, unit=unit, decimal=self.decimal)
-        leaf = path.rsplit(".", 1)[-1]
-        if v is not None and (leaf.startswith("pct_") or leaf.endswith("_pct")):
+        if v is not None and any(g.startswith("pct_") or g.endswith("_pct") for g in path.split(".")):
             return self.check_pct(path, v)
         if v is not None and v < 0:
             self.invalid.append({"path": path, "raw": "%g" % v, "reason": "negative value"})
