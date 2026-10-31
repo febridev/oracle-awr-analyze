@@ -37,3 +37,15 @@ def test_sample_known_sqls(sample_awr):
     for i in ("mon000000001a", "mon000000002b", "mon000000003c", "mon000000004d"):
         assert cat[i] == "monitoring", i
     assert cat["app000000001a"] == "user_app"
+
+
+def test_same_rule_on_two_objects_is_one_signal():
+    r = classify({"module": "X", "text": "SELECT * FROM LCK_A JOIN LCK_B ON 1=1"}, DB, CLS)
+    assert (r["category"], r["confidence"]) == ("user_app", "medium")
+
+
+def test_prefix_anchored_to_object_name():
+    assert classify({"module": "X", "text": "SELECT * FROM SHOP_ORDERS"}, DB, CLS)["category"] == "unknown"
+    assert classify({"module": "X", "text": "SELECT * FROM APP.OP_X"}, DB, CLS)["category"] == "user_app"
+    dba = dict(CLS, dba={"app_table_prefixes": ["ORD_"]})
+    assert classify({"module": "X", "text": "SELECT * FROM DROP_X"}, DB, dba)["category"] == "unknown"

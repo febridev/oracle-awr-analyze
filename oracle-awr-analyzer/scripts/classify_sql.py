@@ -18,6 +18,10 @@ def _any(pats, s):
     return next((p for p in pats if s and re.search(p, s, re.I)), None)
 
 
+def _prefix(pats, name):
+    return next((p for p in pats if re.match(p, name, re.I)), None)
+
+
 def _objects(text):
     return [o for o in _OBJ_RE.findall(text or "")] + _VIEW_RE.findall(text or "")
 
@@ -29,8 +33,14 @@ def classify(sql: dict, db_host: str, cls: dict) -> dict:
     tp = cls["text_patterns"]
     sig = []  # (group, category, strength, reason); lower group number wins
 
-    def add(group, cat, strength, why):
-        sig.append((group, cat, strength, why))
+    seen = set()
+
+    def add(group, cat, strength, why, kind=None):
+        # one signal per (category, kind): several objects hitting the same rule are not independent evidence
+        key = (group, cat, strength, kind or why)
+        if key not in seen:
+            seen.add(key)
+            sig.append((group, cat, strength, why))
 
     # DBA-supplied lists: explicit
     for key, cat in (("monitoring_modules", "monitoring"),):
@@ -47,9 +57,9 @@ def classify(sql: dict, db_host: str, cls: dict) -> dict:
         owner, _, name = o.rpartition(".")
         for key, cat in (("user_schemas", "user_app"), ("monitoring_schemas", "monitoring")):
             if owner and owner.upper() in [s.upper() for s in dba.get(key, [])]:
-                add(0, cat, "explicit", f"object {o} owned by DBA {key} entry")
-        if _any(dba.get("app_table_prefixes", []), name or o):
-            add(0, "user_app", "explicit", f"object {o} has DBA app table prefix")
+                add(0, cat, "explicit", f"object {o} owned by DBA {key} entry", "owner-" + key)
+        if _prefix(dba.get("app_table_prefixes", []), name):
+            add(0, "user_app", "explicit", f"object {o} has DBA app table prefix", "dba-prefix")
     # definitive built-in signals
     p = _any(cls["adhoc_modules"], module)
     if p:
@@ -86,8 +96,8 @@ def classify(sql: dict, db_host: str, cls: dict) -> dict:
     if objs and all(_any(tp["dictionary_objects"], o) for o in objs):
         add(4, "monitoring", "strong", "only dictionary/performance views referenced")
     for o in objs:
-        if _any(cls["app_table_prefixes"], o.rpartition(".")[2]):
-            add(4, "user_app", "strong", f"object {o} has an application table prefix")
+        if _prefix(cls["app_table_prefixes"], o.rpartition(".")[2]):
+            add(4, "user_app", "strong", f"object {o} has an application table prefix", "prefix")
     # internal text hit loses to a monitoring module/host signal
     if any(g in (1, 2) and c == "monitoring" for g, c, _, _ in sig):
         sig = [s for s in sig if s[1] != "oracle_internal" or s[0] != 0]
