@@ -64,6 +64,12 @@ def test_cli_ok_and_duplicate_id(tmp_path, capsys):
     "SELECT 1 FROM dual\r\n/\r\nCOMMENT ON TABLE t IS NULL",
     "SELECT 1 FROM dual\r\rHOST ls",
     "SELECT 1 FROM dual\n.\nHOST ls",
+    "SELECT 1\n  .  \nFROM dual",
+    "SELECT 1 FROM dual\n.\t\nHOST ls",
+    "SELECT 'a\n/\nb' FROM dual",
+    "SELECT 'a\n.\nb' FROM dual",
+    "SELECT 'a\n\nb' FROM dual",
+    "SELECT q'[a\n.\nb]' FROM dual",
     "SELECT 1\n#HOST ls\nFROM dual;",
     "SELECT q'[']' FROM dual; DELETE FROM t WHERE x = '",
     "SELECT \"DBMS_PIPE\".\"SEND_MESSAGE\"('p') FROM dual",
@@ -104,3 +110,7 @@ def test_fill_rejects_unicode_digits():
     vals = {"dbid": "\u0661\u0662", "inst_id": 1, "begin_snap": 1, "end_snap": 2, "sql_id": "abcdefghij123"}
     with pytest.raises(ValueError):
         fill(CAT["V-01"], vals)
+
+
+def test_single_line_literals_accepted():
+    assert lint_query(q("SELECT 'a / b', q'[x . y]' FROM dual;", params="")) == []

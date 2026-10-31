@@ -53,12 +53,14 @@ def lint_query(q: dict) -> list:
     no_comments = _COMMENT_OR_STR.sub(lambda m: " " if m.group(0)[:2] in ("--", "/*") else m.group(0), sql)
     bare = _COMMENT_OR_STR.sub(" ", sql)
     marked = _COMMENT_OR_STR.sub(" x ", sql)  # placeholder keeps comment-only lines non-blank
+    if any("\n" in m.group(0) and m.group(0)[:2] not in ("--", "/*") for m in _COMMENT_OR_STR.finditer(sql)):
+        errs.append("newline inside a string literal is forbidden")
     body = bare.rstrip()
     if body.count(";") > (1 if body.endswith(";") else 0):
         errs.append("more than one statement (';' only allowed at the end)")
     if re.search(r"(?m)^[ \t]*/[ \t]*$", bare):
         errs.append("line consisting only of '/' is forbidden")
-    if re.search(r"(?m)^[ \t]*(\.|#.*)$", bare):
+    if re.search(r"(?m)^[ \t]*(\.[ \t]*|#.*)$", bare):
         errs.append("line that is only '.' or starts with '#' is forbidden")
     if re.search(r"\n[ \t\r]*\n", marked.strip()):
         errs.append("blank line inside statement is forbidden")
