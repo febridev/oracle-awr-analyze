@@ -71,9 +71,13 @@ class Doc:
         pats = [re.compile(p, re.I) for p in SECTIONS[key]]
         out = []
         for t in self.soup.find_all("table"):
-            head = t.find_previous(["h2", "h3"])
-            if any(p.search(t.get("summary") or "") or (head and p.search(_clean(head.get_text())))
-                   for p in pats):
+            summ = t.get("summary")
+            if summ is not None:  # summary is primary; heading only for tables without one
+                hit = any(p.search(summ) for p in pats)
+            else:
+                head = t.find_previous(["h2", "h3"])
+                hit = bool(head) and any(p.search(_clean(head.get_text())) for p in pats)
+            if hit:
                 out.append(t)
         return out
 
@@ -84,15 +88,20 @@ class Doc:
 
 def load_doc(path: Path) -> Doc:
     raw = Path(path).read_bytes()
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")  # shortcut: no charset sniffing, add if non-latin NLS files appear
+    text = None
+    m = re.search(rb"charset\s*=\s*[\"']?\s*([\w.:-]+)", raw[:2048], re.I)
+    for enc in ([m.group(1).decode("ascii")] if m else []) + ["utf-8", "latin-1"]:
+        try:
+            text = raw.decode(enc)
+            break
+        except (LookupError, UnicodeDecodeError):
+            pass
     head = text[:65536].lower()
     if "<html" not in head and "<table" not in head:
-        raise UnsupportedFormatError("input is not an HTML report (text AWR is not supported)")
+        raise UnsupportedFormatError("text AWR not supported in v1; regenerate with awrrpt.sql in HTML")
     if "workload repository" not in text.lower():
-        raise NotAwrError("not an Oracle AWR report")
+        raise NotAwrError(("not an Oracle AWR report: expected an HTML file produced by awrrpt.sql / awrgrpt.sql / "
+                           "DBMS_WORKLOAD_REPOSITORY.AWR_REPORT_HTML whose title contains 'WORKLOAD REPOSITORY'"))
     return Doc(BeautifulSoup(text, _PARSER), _PARSER_NAME)
 
 
@@ -104,7 +113,11 @@ def records(table: Tag) -> list:
     rows = table_rows(table)
     for i, r in enumerate(rows):
         if sum(1 for c in r if c) >= 2:
-            keys = [slug(h) for h in r]
+            keys, seen = [], {}
+            for j, h in enumerate(r):
+                k = slug(h) or "col%d" % j
+                seen[k] = seen.get(k, 0) + 1
+                keys.append(k if seen[k] == 1 else "%s_%d" % (k, seen[k]))
             return [dict(zip(keys, row)) for row in rows[i + 1:]]
     return []
 
