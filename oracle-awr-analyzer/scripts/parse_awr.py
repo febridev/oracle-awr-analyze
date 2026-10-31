@@ -40,7 +40,7 @@ def num(text: Optional[str], unit: Optional[str] = None, decimal: str = ".") -> 
 
 
 def slug(label: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", label.lower().replace("%", "pct")).strip("_")
+    return re.sub(r"[^a-z0-9]+", "_", label.lower().replace("%", " pct ")).strip("_")
 
 
 class NotAwrError(Exception):
@@ -218,23 +218,41 @@ class Ctx:
             self.missing_section(key, "table not found")
         return t
 
-    def n(self, text: Optional[str], unit: Optional[str] = None) -> Optional[float]:
-        return num(text, unit=unit, decimal=self.decimal)
+    def val(self, path: str, text: Optional[str], unit: Optional[str] = None) -> Optional[float]:
+        """Parse a number; null + invalid entry if negative, or outside 0-100 for percentages."""
+        v = num(text, unit=unit, decimal=self.decimal)
+        leaf = path.rsplit(".", 1)[-1]
+        if v is not None and (leaf.startswith("pct_") or leaf.endswith("_pct")):
+            return self.check_pct(path, v)
+        if v is not None and v < 0:
+            self.invalid.append({"path": path, "raw": "%g" % v, "reason": "negative value"})
+            return None
+        return v
+
+    def expect(self, key: str, recs: list, cols) -> None:
+        """Record each expected column absent from the table's header (once per column)."""
+        if recs:
+            for c in cols:
+                if c not in recs[0]:
+                    self.missing_section("%s.%s" % (key, c), "column not found")
 
 
-def _labeled(ctx: Ctx, key: str) -> Optional[list]:
+def _labeled(ctx: Ctx, key: str, cols) -> Optional[list]:
     """Rows of a header+label-column table as (slug(label), record); label key is col0."""
     t = ctx.table(key)
     if t is None:
         return None
-    return [(slug(r.get("col0", "")), r) for r in records(t) if r.get("col0")]
+    recs = records(t)
+    ctx.expect(key, recs, cols)
+    return [(slug(r.get("col0", "")), r) for r in recs if r.get("col0")]
 
 
 def extract_load_profile(ctx: Ctx) -> Optional[dict]:
-    rows = _labeled(ctx, "load_profile")
+    rows = _labeled(ctx, "load_profile", ("per_second", "per_transaction"))
     if rows is None:
         return None
-    return {k: {"per_s": ctx.n(r.get("per_second")), "per_txn": ctx.n(r.get("per_transaction"))}
+    return {k: {"per_s": ctx.val("load_profile.%s.per_s" % k, r.get("per_second")),
+                "per_txn": ctx.val("load_profile.%s.per_txn" % k, r.get("per_transaction"))}
             for k, r in rows}
 
 
@@ -247,8 +265,7 @@ def extract_efficiency(ctx: Ctx) -> Optional[dict]:
         for i in range(0, len(row) - 1, 2):
             if row[i]:
                 k = slug(row[i])
-                v = ctx.n(row[i + 1])
-                out[k] = ctx.check_pct("efficiency." + k, v) if k.endswith("_pct") else v
+                out[k] = ctx.val("efficiency." + k, row[i + 1])
     return out
 
 
@@ -256,78 +273,104 @@ def extract_top_events(ctx: Ctx) -> Optional[list]:
     t = ctx.table("top_events")
     if t is None:
         return None
-    return [{"event": r.get("event"), "waits": ctx.n(r.get("waits")),
-             "total_wait_s": ctx.n(r.get("total_wait_time_sec"), "s"),
-             "avg_wait_ms": ctx.n(r.get("avg_wait"), "ms"), "pct_db_time": ctx.n(r.get("pct_db_time")),
-             "wait_class": r.get("wait_class") or None}
-            for r in records(t) if r.get("event")]
+    recs = [r for r in records(t)]
+    ctx.expect("top_events", recs, ("event", "waits", "total_wait_time_sec", "avg_wait", "pct_db_time",
+                                    "wait_class"))
+    out = []
+    for r in recs:
+        if r.get("event"):
+            p = "top_events[%d]." % len(out)
+            out.append({"event": r["event"], "waits": ctx.val(p + "waits", r.get("waits")),
+                        "total_wait_s": ctx.val(p + "total_wait_s", r.get("total_wait_time_sec"), "s"),
+                        "avg_wait_ms": ctx.val(p + "avg_wait_ms", r.get("avg_wait"), "ms"),
+                        "pct_db_time": ctx.val(p + "pct_db_time", r.get("pct_db_time")),
+                        "wait_class": r.get("wait_class") or None})
+    return out
 
 
 def extract_time_model(ctx: Ctx) -> Optional[dict]:
     t = ctx.table("time_model")
     if t is None:
         return None
-    return {slug(r["statistic_name"]): {"time_s": ctx.n(r.get("time_s")),
-                                        "pct_db_time": ctx.n(r.get("pct_of_db_time"))}
-            for r in records(t) if r.get("statistic_name")}
+    recs = records(t)
+    ctx.expect("time_model", recs, ("statistic_name", "time_s", "pct_of_db_time"))
+    return {slug(r["statistic_name"]): {
+        "time_s": ctx.val("time_model.%s.time_s" % slug(r["statistic_name"]), r.get("time_s")),
+        "pct_db_time": ctx.val("time_model.%s.pct_db_time" % slug(r["statistic_name"]), r.get("pct_of_db_time"))}
+        for r in recs if r.get("statistic_name")}
 
 
 def _one_row(ctx: Ctx, key: str, cols: dict) -> Optional[dict]:
     t = ctx.table(key)
     if t is None:
         return None
-    rec = next(iter(records(t)), {})
-    out = {}
-    for name, src in cols.items():
-        v = ctx.n(rec.get(src))
-        out[name] = ctx.check_pct("%s.%s" % (key, name), v) if name.endswith("_pct") else v
-    return out
+    recs = records(t)
+    ctx.expect(key, recs, cols.values())
+    rec = recs[0] if recs else {}
+    return {name: ctx.val("%s.%s" % (key, name), rec.get(src)) for name, src in cols.items()}
 
 
 def extract_host_cpu(ctx: Ctx) -> Optional[dict]:
     return _one_row(ctx, "host_cpu", {
         "cpus": "cpus", "cores": "cores", "sockets": "sockets", "load_begin": "load_average_begin",
-        "load_end": "load_average_end", "user_pct": "pctuser", "system_pct": "pctsystem",
-        "wio_pct": "pctwio", "idle_pct": "pctidle"})
+        "load_end": "load_average_end", "user_pct": "pct_user", "system_pct": "pct_system",
+        "wio_pct": "pct_wio", "idle_pct": "pct_idle"})
 
 
 def extract_instance_cpu(ctx: Ctx) -> Optional[dict]:
     return _one_row(ctx, "instance_cpu", {
-        "total_cpu_pct": "pcttotal_cpu", "busy_cpu_pct": "pctbusy_cpu",
-        "db_time_waiting_cpu_rm_pct": "pctdb_time_waiting_for_cpu_resource_manager"})
+        "total_cpu_pct": "pct_total_cpu", "busy_cpu_pct": "pct_busy_cpu",
+        "db_time_waiting_cpu_rm_pct": "pct_db_time_waiting_for_cpu_resource_manager"})
 
 
 def extract_os_stats(ctx: Ctx) -> Optional[dict]:
     t = ctx.table("os_stats")
     if t is None:
         return None
-    return {r["statistic"]: {"value": ctx.n(r.get("value")), "end_value": ctx.n(r.get("end_value"))}
-            for r in records(t) if r.get("statistic")}
+    recs = records(t)
+    ctx.expect("os_stats", recs, ("statistic", "value", "end_value"))
+    return {r["statistic"]: {"value": ctx.val("os_stats.%s.value" % r["statistic"], r.get("value")),
+                             "end_value": ctx.val("os_stats.%s.end_value" % r["statistic"], r.get("end_value"))}
+            for r in recs if r.get("statistic")}
 
 
 def extract_memory(ctx: Ctx) -> Optional[dict]:
-    rows = _labeled(ctx, "memory")
+    rows = _labeled(ctx, "memory", ("begin", "end"))
     if rows is None:
         return None
-    out = {}
-    for k, r in rows:
-        f = (lambda v: ctx.check_pct("memory.%s" % k, v)) if k.endswith("_pct") or k.startswith("pct_") \
-            else (lambda v: v)
-        out[k] = {"begin": f(ctx.n(r.get("begin"))), "end": f(ctx.n(r.get("end")))}
-    return out
+    return {k: {"begin": ctx.val("memory.%s.begin" % k, r.get("begin")),
+                "end": ctx.val("memory.%s.end" % k, r.get("end"))} for k, r in rows}
 
 
 def extract_io_profile(ctx: Ctx) -> Optional[dict]:
-    rows = _labeled(ctx, "io_profile")
+    rows = _labeled(ctx, "io_profile", ("read_write_per_second", "read_per_second", "write_per_second"))
     if rows is None:
         return None
-    return {k: {"rw_per_s": ctx.n(r.get("read_write_per_second")), "r_per_s": ctx.n(r.get("read_per_second")),
-                "w_per_s": ctx.n(r.get("write_per_second"))} for k, r in rows}
+    return {k: {"rw_per_s": ctx.val("io_profile.%s.rw_per_s" % k, r.get("read_write_per_second")),
+                "r_per_s": ctx.val("io_profile.%s.r_per_s" % k, r.get("read_per_second")),
+                "w_per_s": ctx.val("io_profile.%s.w_per_s" % k, r.get("write_per_second"))} for k, r in rows}
+
+
+# header slug (repeated headers get _2 from records()) -> output key
+_IOSTAT_COLS = {"reads_data": "reads_data", "reqs_per_sec": "reads_reqs_per_s",
+                "data_per_sec": "reads_data_per_s", "writes_data": "writes_data",
+                "reqs_per_sec_2": "writes_reqs_per_s", "data_per_sec_2": "writes_data_per_s",
+                "waits_count": "waits_count", "avg_time": "avg_time_ms"}
 
 
 def extract_iostat_function(ctx: Ctx) -> Optional[list]:
     t = ctx.table("iostat_function")
     if t is None:
         return None
-    return [{k: (v if k == "function_name" else ctx.n(v, "ms")) for k, v in r.items()}
-            for r in records(t) if r.get("function_name")]
+    recs = records(t)
+    ctx.expect("iostat_function", recs, ("function_name",) + tuple(_IOSTAT_COLS))
+    out = []
+    for r in recs:
+        if r.get("function_name"):
+            row = {"function_name": r["function_name"]}
+            for src, name in _IOSTAT_COLS.items():
+                # shortcut: num() treats K/M/G/T as decimal (1e3..), AWR means binary; fine for ranking, fix if exact bytes needed
+                row[name] = ctx.val("iostat_function[%d].%s" % (len(out), name), r.get(src),
+                                    "ms" if name == "avg_time_ms" else None)
+            out.append(row)
+    return out

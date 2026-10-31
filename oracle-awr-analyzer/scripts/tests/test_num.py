@@ -21,4 +21,6 @@ def test_slug():
     assert slug("DB Time(s):") == "db_time_s"
     assert slug("Buffer Hit   %:") == "buffer_hit_pct"
     assert slug("% Host Mem used for SGA+PGA:") == "pct_host_mem_used_for_sga_pga"
+    assert slug("%Total") == "pct_total" and slug("%User") == "pct_user"
+    assert slug("% DB time") == "pct_db_time" and slug("Buffer Hit %:") == "buffer_hit_pct"
     assert slug("Redo size (bytes):") == "redo_size_bytes"

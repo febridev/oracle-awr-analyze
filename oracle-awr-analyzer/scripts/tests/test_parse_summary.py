@@ -33,7 +33,8 @@ def test_cpu_memory_io(sample_ctx):
     assert extract_memory(sample_ctx)["pct_host_mem_used_for_sga_pga"]["end"] == 47.80
     assert extract_io_profile(sample_ctx)["total_mb"]["rw_per_s"] == 1214.6
     io = extract_iostat_function(sample_ctx)
-    assert io[0]["function_name"] == "Others" and io[0]["avg_time"] == 0.5141
+    assert io[0]["function_name"] == "Others" and io[0]["avg_time_ms"] == 0.5141
+    assert io[0]["reads_reqs_per_s"] == 4620.86 and io[0]["writes_reqs_per_s"] == 31.17
 
 
 def test_missing_section_recorded(tmp_path, sample_path):
@@ -46,5 +47,21 @@ def test_missing_section_recorded(tmp_path, sample_path):
 def test_extractor_tolerates_extra_and_missing_columns(tmp_path, sample_path):
     html = sample_path.read_text().replace('<th class="awrbg" scope="col">Wait Class</th>',
                                            '<th class="awrbg" scope="col">Wait Klass</th>', 1)
-    ev = extract_top_events(make_ctx(tmp_path, html))
+    ctx = make_ctx(tmp_path, html)
+    ev = extract_top_events(ctx)
     assert ev[0]["wait_class"] is None and ev[0]["pct_db_time"] == 35.6
+    assert ctx.missing == [{"section": "top_events.wait_class", "reason": "column not found"}]
+
+
+def test_negative_count_nulled(tmp_path, sample_path):
+    html = sample_path.read_text()
+    ctx = make_ctx(tmp_path, html.replace(">7,287,402<", ">-7,287,402<", 1))
+    ev = extract_top_events(ctx)
+    assert ev[2]["waits"] is None
+    assert {"path": "top_events[2].waits", "raw": "-7.2874e+06", "reason": "negative value"} in ctx.invalid
+
+
+def test_non_parse_cpu_checked(tmp_path, sample_path):
+    html = sample_path.read_text().replace("  99.63<", "  199.63<", 1)
+    ctx = make_ctx(tmp_path, html)
+    assert extract_efficiency(ctx)["pct_non_parse_cpu"] is None
