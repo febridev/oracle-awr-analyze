@@ -1,7 +1,10 @@
 """Parse an Oracle AWR HTML report into JSON."""
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -66,6 +69,32 @@ SECTIONS = {
     "memory": (r"^This table displays memory statistics",),
     "io_profile": (r"^This table displays IO profile",),
     "iostat_function": (r"IO Statistics for different functions",),
+    "fg_events": (r"Foreground Wait Events and their wait statistics",),
+    "bg_events": (r"background wait events statistics",),
+    "sql_by_elapsed": (r"top SQL by elapsed time",),
+    "sql_by_cpu": (r"top SQL by CPU time",),
+    "sql_by_user_io": (r"top SQL by user I/O time",),
+    "sql_by_gets": (r"top SQL by buffer gets",),
+    "sql_by_reads": (r"top SQL by physical reads",),
+    "sql_by_executions": (r"top SQL by number of executions",),
+    "sql_by_parse_calls": (r"top SQL by number of parse calls",),
+    "sql_text": (r"text of the SQL statements",),
+    "services": (r"service statistics\. It displays service names",),
+    "thread_activity": (r"thread activity stats",),
+    "addm": (r"top ADDM findings",),
+    "os_detail": (r"detailed operating systems statistics",),
+    "pga_summary": (r"PGA aggregate summary",),
+    "pga_hist": (r"PGA aggregate target histograms",),
+    "sga_advisory": (r"SGA target advisory",),
+    "shared_pool_advisory": (r"shared pool advisory",),
+    "buffer_pool_advisory": (r"buffer pool statistics",),
+    "pga_advisory": (r"PGA memory advisory",),
+    "seg_logical": (r"top segments by logical reads",),
+    "seg_physical": (r"top segments by physical reads",),
+    "seg_row_lock": (r"top segments by row lock waits",),
+    "seg_buffer_busy": (r"top segments by buffer busy waits",),
+    "activity": (r"^This table displays Instance activity statistics",),
+    "parameters": (r"modified initialization parameters",),
 }
 
 
@@ -373,3 +402,257 @@ def extract_iostat_function(ctx: Ctx) -> Optional[list]:
                                     "ms" if name == "avg_time_ms" else None)
             out.append(row)
     return out
+
+
+def _events(ctx: Ctx, key: str, pct_col: str, pct_key: str) -> Optional[list]:
+    t = ctx.table(key)
+    if t is None:
+        return None
+    recs = records(t)
+    ctx.expect(key, recs, ("event", "waits", "pct_time_outs", "total_wait_time_s", "avg_wait", "waits_txn", pct_col))
+    out = []
+    for r in recs:
+        if r.get("event"):
+            p = "%s[%d]." % (key, len(out))
+            out.append({"event": r["event"], "waits": ctx.val(p + "waits", r.get("waits")),
+                        "timeouts_pct": ctx.val(p + "timeouts_pct", r.get("pct_time_outs")),
+                        "total_wait_s": ctx.val(p + "total_wait_s", r.get("total_wait_time_s"), "s"),
+                        "avg_wait_ms": ctx.val(p + "avg_wait_ms", r.get("avg_wait"), "ms"),
+                        "waits_per_txn": ctx.val(p + "waits_per_txn", r.get("waits_txn")),
+                        pct_key: ctx.val(p + pct_key, r.get(pct_col))})
+    return out
+
+
+def extract_fg_events(ctx: Ctx) -> Optional[list]:
+    return _events(ctx, "fg_events", "pct_db_time", "pct_db_time")
+
+
+def extract_bg_events(ctx: Ctx) -> Optional[list]:
+    return _events(ctx, "bg_events", "pct_bg_time", "pct_bg_time")
+
+
+_MODULE_RE = re.compile(r"^(?P<program>[^@\s]+)@(?P<host>\S+)\s*\(TNS V1-V3\)$")
+
+
+def split_module(module: Optional[str]) -> dict:
+    m = _MODULE_RE.match((module or "").strip())
+    return {"program": m.group("program") if m else None, "client_host": m.group("host") if m else None}
+
+
+_SQL_TABLES = (("by_elapsed", "sql_by_elapsed"), ("by_cpu", "sql_by_cpu"), ("by_user_io", "sql_by_user_io"),
+               ("by_gets", "sql_by_gets"), ("by_reads", "sql_by_reads"),
+               ("by_executions", "sql_by_executions"), ("by_parse_calls", "sql_by_parse_calls"))
+_SQL_TEXT_COLS = ("sql_id", "sql_module", "sql_text")
+
+
+def extract_sql(ctx: Ctx) -> list:
+    """Merge the seven top-SQL tables by sql_id; full text from the Complete List when present."""
+    sqls: dict = {}
+    for name, key in _SQL_TABLES:
+        t = ctx.table(key)
+        if t is None:
+            continue
+        recs = records(t)
+        ctx.expect(key, recs, _SQL_TEXT_COLS)
+        for r in recs:
+            sid = r.get("sql_id")
+            if not sid:
+                continue
+            e = sqls.setdefault(sid, dict({"sql_id": sid, "module": r.get("sql_module") or None, "text": r.get("sql_text") or None},
+                                          **{n: None for n, _ in _SQL_TABLES}))
+            e["module"] = e["module"] or r.get("sql_module") or None
+            e["text"] = e["text"] or r.get("sql_text") or None
+            e[name] = {k: ctx.val("sql[%s].%s.%s" % (sid, name, k), v) for k, v in r.items()
+                       if k not in _SQL_TEXT_COLS}
+    tt = ctx.table("sql_text")
+    full: dict = {}
+    if tt is not None:
+        recs = records(tt)
+        ctx.expect("sql_text", recs, ("sql_id", "sql_text"))
+        for r in recs:
+            full.setdefault(r.get("sql_id"), r.get("sql_text"))
+    for sid, e in sqls.items():
+        e["text"] = full.get(sid) or e["text"]
+        e.update(split_module(e["module"]))
+    return list(sqls.values())
+
+
+def extract_services(ctx: Ctx) -> Optional[list]:
+    t = ctx.table("services")
+    if t is None:
+        return None
+    recs = records(t)
+    cols = ("db_time_s", "db_cpu_s", "physical_reads_k", "logical_reads_k")
+    ctx.expect("services", recs, ("service_name",) + cols)
+    return [dict({"service_name": r["service_name"]},
+                 **{c: ctx.val("services[%d].%s" % (i, c), r.get(c)) for c in cols})
+            for i, r in enumerate(x for x in recs if x.get("service_name"))]
+
+
+def extract_thread_activity(ctx: Ctx) -> Optional[dict]:
+    t = ctx.table("thread_activity")
+    if t is None:
+        return None
+    recs = records(t)
+    ctx.expect("thread_activity", recs, ("statistic", "total", "per_hour"))
+    r = next((x for x in recs if x.get("statistic", "").lower().startswith("log switches")), None)
+    if r is None:
+        ctx.missing_section("thread_activity.log_switches", "row not found")
+        r = {}
+    return {"log_switches_total": ctx.val("thread_activity.log_switches_total", r.get("total")),
+            "log_switches_per_hour": ctx.val("thread_activity.log_switches_per_hour", r.get("per_hour"))}
+
+
+def extract_addm(ctx: Ctx) -> Optional[list]:
+    t = ctx.table("addm")
+    if t is None:
+        return None
+    recs = records(t)
+    ctx.expect("addm", recs, ("finding_name", "avg_active_sessions_of_the_task",
+                              "percent_active_sessions_of_finding", "task_name", "begin_snap_time", "end_snap_time"))
+    out = []
+    for r in recs:
+        if r.get("finding_name"):
+            p = "addm[%d]." % len(out)
+            out.append({"finding": r["finding_name"],
+                        "avg_active_sessions": ctx.val(p + "avg_active_sessions", r.get("avg_active_sessions_of_the_task")),
+                        "pct_active_sessions": ctx.val(p + "pct_active_sessions", r.get("percent_active_sessions_of_finding")),
+                        "task": r.get("task_name"),
+                        "begin_time": to_iso(r.get("begin_snap_time", "")), "end_time": to_iso(r.get("end_snap_time", ""))})
+    return out
+
+
+def extract_os_detail(ctx: Ctx, year_hint: Optional[int] = None) -> Optional[list]:
+    t = ctx.table("os_detail")
+    if t is None:
+        return None
+    recs = records(t)
+    cols = {"load": "load", "busy_pct": "pct_busy", "user_pct": "pct_user", "sys_pct": "pct_sys",
+            "idle_pct": "pct_idle", "iowait_pct": "pct_iowait"}
+    ctx.expect("os_detail", recs, ("snap_time",) + tuple(cols.values()))
+    out = []
+    for r in recs:
+        if r.get("snap_time"):
+            p = "os_detail[%d]." % len(out)
+            out.append(dict({"snap_time": to_iso(r["snap_time"], year_hint)},
+                            **{k: ctx.val(p + k, r.get(src)) for k, src in cols.items()}))
+    return out
+
+
+def extract_pga(ctx: Ctx) -> Optional[dict]:
+    s = _one_row(ctx, "pga_summary", {"cache_hit_pct": "pga_cache_hit_pct", "wa_mb_processed": "w_a_mb_processed",
+                                      "extra_wa_mb": "extra_w_a_mb_read_written"})
+    out = s or {"cache_hit_pct": None, "wa_mb_processed": None, "extra_wa_mb": None}
+    out["multipass_execs"] = None
+    t = ctx.table("pga_hist")
+    if t is not None:
+        recs = records(t)
+        ctx.expect("pga_hist", recs, ("m_pass_execs",))
+        vals = [ctx.val("pga_hist.m_pass_execs", r.get("m_pass_execs")) for r in recs]
+        out["multipass_execs"] = sum(v for v in vals if v is not None) if recs else None
+    return out
+
+
+def _numrecs(ctx: Ctx, key: str, path: str) -> Optional[list]:
+    """All columns of a table as slug-keyed records: numbers where numeric, else the raw text (or None)."""
+    t = ctx.table(key)
+    if t is None:
+        return None
+    out = []
+    for r in records(t):
+        if any(r.values()):
+            p = "%s[%d]." % (path, len(out))
+            out.append({k: (ctx.val(p + k, v) if num(v, decimal=ctx.decimal) is not None else (v or None))
+                        for k, v in r.items()})
+    return out
+
+
+def extract_advisories(ctx: Ctx) -> dict:
+    return {n: _numrecs(ctx, k, "advisories." + n) for n, k in (
+        ("sga_target", "sga_advisory"), ("shared_pool", "shared_pool_advisory"),
+        ("buffer_pool", "buffer_pool_advisory"), ("pga", "pga_advisory"))}
+
+
+def extract_segments(ctx: Ctx) -> dict:
+    return {n: _numrecs(ctx, k, "segments." + n) for n, k in (
+        ("by_logical_reads", "seg_logical"), ("by_physical_reads", "seg_physical"),
+        ("by_row_lock_waits", "seg_row_lock"), ("by_buffer_busy_waits", "seg_buffer_busy"))}
+
+
+def extract_activity(ctx: Ctx) -> Optional[dict]:
+    t = ctx.table("activity")
+    if t is None:
+        return None
+    recs = records(t)
+    ctx.expect("activity", recs, ("statistic", "total", "per_second", "per_trans"))
+    return {slug(r["statistic"]): {"total": ctx.val("activity.%s.total" % slug(r["statistic"]), r.get("total")),
+                                   "per_s": ctx.val("activity.%s.per_s" % slug(r["statistic"]), r.get("per_second")),
+                                   "per_txn": ctx.val("activity.%s.per_txn" % slug(r["statistic"]), r.get("per_trans"))}
+            for r in recs if r.get("statistic")}
+
+
+def extract_parameters(ctx: Ctx) -> Optional[dict]:
+    t = ctx.table("parameters")
+    if t is None:
+        return None
+    recs = records(t)
+    ctx.expect("parameters", recs, ("parameter_name", "begin_value", "end_value_if_different"))
+    return {r["parameter_name"]: {"begin": r.get("begin_value") or None, "end": r.get("end_value_if_different") or None}
+            for r in recs if r.get("parameter_name")}
+
+
+_EXTRACTORS = ("load_profile", "efficiency", "top_events", "time_model", "host_cpu", "instance_cpu", "os_stats",
+               "memory", "io_profile", "iostat_function", "fg_events", "bg_events", "sql", "services",
+               "thread_activity", "addm", "pga", "advisories", "segments", "activity", "parameters")
+
+
+def parse(path: Path) -> dict:
+    doc = load_doc(path)
+    meta = extract_meta(doc)
+    ctx = Ctx(doc, meta["decimal"])
+    out = {"meta": meta}
+    for name in _EXTRACTORS:
+        out[name] = globals()["extract_" + name](ctx)
+    m = re.match(r"(\d{4})-", meta.get("begin_time") or "")
+    out["os_detail"] = extract_os_detail(ctx, int(m.group(1)) if m else None)  # shortcut: ignores year rollover inside one report, fix if reports span New Year
+    out["missing_sections"], out["invalid_values"] = ctx.missing, ctx.invalid
+    return out
+
+
+def make_run_dir(parent: Path, meta: dict) -> Path:
+    safe = lambda v: re.sub(r"[^\w.-]", "_", str(v if v is not None else "unknown"))
+    base = "awr-report-%s-%s-%s_%s" % (safe(meta.get("db_name")), safe(meta.get("inst_num")),
+                                       safe(meta.get("begin_snap")), safe(meta.get("end_snap")))
+    parent = Path(parent)
+    parent.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        d = parent / (base if n == 1 else "%s-%d" % (base, n))
+        try:
+            d.mkdir()
+            return d
+        except FileExistsError:
+            n += 1
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Parse an Oracle AWR HTML report into awr.json")
+    ap.add_argument("awr_html")
+    ap.add_argument("--out", default=".", help="parent folder for the run directory")
+    a = ap.parse_args(argv)
+    try:
+        awr = parse(Path(a.awr_html))
+    except NotAwrError as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 2
+    except UnsupportedFormatError as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 3
+    run = make_run_dir(Path(a.out), awr["meta"])
+    (run / "awr.json").write_text(json.dumps(awr, indent=1, ensure_ascii=False), encoding="utf-8")
+    print(run)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
