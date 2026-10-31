@@ -57,3 +57,9 @@ def build_padded(src, out_dir, min_bytes):
 def cfg():
     from common import load_config
     return load_config(None)
+
+
+def mini_awr(cpus, elapsed_min, db_time_min, db_cpu_pct, idle_pct):
+    return {"meta": {"cpus": cpus, "cores": cpus, "elapsed_min": elapsed_min, "db_time_min": db_time_min},
+            "time_model": {"db_cpu": {"time_s": 0, "pct_db_time": db_cpu_pct}},
+            "host_cpu": {"idle_pct": idle_pct}, "top_events": [], "addm": [], "os_detail": []}

@@ -1,0 +1,9 @@
+load:
+  bands: {idle: 0.10, normal: 0.50, busy: 1.00, saturated: 2.00}   # upper bounds; above saturated = Critical
+  high_load_ratio: 0.50          # bottleneck table "high" = Busy or worse
+  cpu_share_high_pct: 70
+  cpu_share_low_pct: 40
+  host_idle_low_pct: 10
+  long_period_min: 120
+  short_period_min: 10
+  hyperthreading_ratio: 1.5      # cpus / cores above this → note
