@@ -19,7 +19,20 @@ def test_bands(ratio, status, cfg):
 
 
 @pytest.mark.parametrize("ratio,share,idle,expect", [
-    (1.2, 80, 5, "cpu_bound"), (1.2, 30, 60, "wait_bound"), (1.2, 55, 60, "mixed"),
+    (1.2, 80, 5, "cpu_bound"), (1.2, 30, 60, "wait_bound"), (1.2, 30, 5, "mixed"), (1.2, 55, 60, "mixed"),
     (0.2, 50, 5, "non_db_host_load"), (0.2, 50, 80, "db_not_problem")])
 def test_bottleneck(ratio, share, idle, expect, cfg):
     assert load_status(mini_awr(10, 60, ratio * 600, share, idle), cfg["thresholds"])["bottleneck"] == expect
+
+
+def test_missing_inputs_no_crash(cfg):
+    for key, val in (("cpus", None), ("elapsed_min", 0), ("db_time_min", None)):
+        a = mini_awr(10, 60, 100, 50, 50)
+        a["meta"][key] = val
+        L = load_status(a, cfg["thresholds"])
+        assert L["avg"]["aas"] is None and L["avg"]["status"] is None and L["bottleneck"] is None
+        assert L["peak"] is None and L["basis"] == "avg" and L["notes"] == [f"load status unavailable: {key} missing"]
+    a = mini_awr(10, 60, 600, 50, 50)
+    a["time_model"] = {}
+    L = load_status(a, cfg["thresholds"])
+    assert L["bottleneck"] is None and L["avg"]["status"] == "Saturated" and L["notes"] == []

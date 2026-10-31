@@ -26,34 +26,46 @@ def _peak(awr: dict, t: dict, cpus: float) -> dict | None:
 
 def load_status(awr: dict, t: dict) -> dict:
     L, meta = t["load"], awr["meta"]
-    cpus = meta["cpus"]
-    aas = round(meta["db_time_min"] / meta["elapsed_min"], 2)
+    cpus, elapsed, dbt = meta.get("cpus"), meta.get("elapsed_min"), meta.get("db_time_min")
+    share = ((awr.get("time_model") or {}).get("db_cpu") or {}).get("pct_db_time")
+    host_idle = (awr.get("host_cpu") or {}).get("idle_pct")
+    notes = [f"load status unavailable: {n} missing" for n, v in (("cpus", cpus), ("elapsed_min", elapsed),
+             ("db_time_min", dbt)) if v is None or v <= 0]
+    top = next((e["wait_class"] for e in awr.get("top_events") or [] if e.get("wait_class")), None)
+    cores = meta.get("cores")
+    ht = bool(cores) and bool(cpus) and cpus / cores > L["hyperthreading_ratio"]
+    if notes:
+        return {"avg": {"aas": None, "load_ratio": None, "status": None, "db_cpu_share_pct": share,
+                        "host_idle_pct": host_idle},
+                "peak": None, "basis": "avg", "bottleneck": None, "top_wait_class": top, "hyperthreading": ht,
+                "idle": False, "notes": notes}
+    aas = round(dbt / elapsed, 2)
     ratio = round(aas / cpus, 2)
-    share = awr["time_model"]["db_cpu"]["pct_db_time"]
-    host_idle = awr["host_cpu"]["idle_pct"]
     peak = _peak(awr, t, cpus)
     peak_idle = peak.pop("_idle_pct") if peak else None
     use_peak = peak is not None and peak["load_ratio"] > ratio
     basis_ratio = peak["load_ratio"] if use_peak else ratio
     idle = peak_idle if use_peak and peak_idle is not None else host_idle
     high = basis_ratio >= L["high_load_ratio"]
-    low_idle = idle is not None and idle < L["host_idle_low_pct"]
-    if high:
-        if share > L["cpu_share_high_pct"] and low_idle:
-            bottleneck = "cpu_bound"
-        elif share < L["cpu_share_low_pct"]:
-            bottleneck = "wait_bound"
-        else:
-            bottleneck = "mixed"
+    if share is None or idle is None:
+        bottleneck = None
     else:
-        bottleneck = "non_db_host_load" if low_idle else "db_not_problem"
+        low_idle = idle < L["host_idle_low_pct"]
+        if high:
+            if share > L["cpu_share_high_pct"] and low_idle:
+                bottleneck = "cpu_bound"
+            elif share < L["cpu_share_low_pct"] and not low_idle:
+                bottleneck = "wait_bound"
+            else:
+                bottleneck = "mixed"
+        else:
+            bottleneck = "non_db_host_load" if low_idle else "db_not_problem"
     avg_status = _status(ratio, L["bands"])
-    cores = meta.get("cores")
     return {
         "avg": {"aas": aas, "load_ratio": ratio, "status": avg_status, "db_cpu_share_pct": share,
                 "host_idle_pct": host_idle},
         "peak": peak, "basis": "peak" if use_peak else "avg", "bottleneck": bottleneck,
-        "top_wait_class": next((e["wait_class"] for e in awr.get("top_events") or [] if e.get("wait_class")), None),
-        "hyperthreading": bool(cores) and cpus / cores > L["hyperthreading_ratio"],
+        "top_wait_class": top, "hyperthreading": ht,
         "idle": avg_status == "Idle" and (peak is None or peak["status"] in ("Idle", "Normal")),
+        "notes": notes,
     }
