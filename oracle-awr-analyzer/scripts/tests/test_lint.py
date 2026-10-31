@@ -43,7 +43,7 @@ def test_allowed_package():
 
 
 def test_fill():
-    assert "s.sql_id = 'abc'" in fill(CAT["V-01"], {"dbid": 1, "inst_id": 1, "begin_snap": 3138, "end_snap": 3162, "sql_id": "abc"})
+    assert "s.sql_id = 'abcdefghij123'" in fill(CAT["V-01"], {"dbid": 1, "inst_id": 1, "begin_snap": 3138, "end_snap": 3162, "sql_id": "abcdefghij123"})
 
 
 def test_cli_ok_and_duplicate_id(tmp_path, capsys):
@@ -52,3 +52,38 @@ def test_cli_ok_and_duplicate_id(tmp_path, capsys):
     (tmp_path / "a.sql").write_text(hdr + hdr)
     assert main(["--catalog", str(tmp_path)]) == 1
     assert "duplicate" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT 1 FROM dual; RENAME t TO t_old",
+    "SELECT 1 FROM dual; LOCK TABLE t IN EXCLUSIVE MODE",
+    "SELECT 1 FROM dual; PURGE DBA_RECYCLEBIN",
+    "SELECT 1 FROM dual; NOAUDIT ALL",
+    "SELECT 1 FROM dual\n/\nCOMMENT ON TABLE t IS NULL",
+    "SELECT 1 FROM dual\n\nHOST rm -rf ~",
+    "SELECT q'[']' FROM dual; DELETE FROM t WHERE x = '",
+    "SELECT \"DBMS_PIPE\".\"SEND_MESSAGE\"('p') FROM dual",
+    "SELECT sys.\"DBMS_LOCK\".SLEEP(1) FROM dual",
+    "SELECT UTL_HTTP.REQUEST('http://x') FROM dual",
+])
+def test_bypasses_rejected(sql):
+    assert lint_query(q(sql, params="")) != []
+
+
+def test_legit_forms_accepted():
+    assert lint_query(q("SELECT q'[it's delete]' FROM dual;", params="")) == []
+    assert lint_query(q("SELECT 1 -- c\n/* x */\nFROM dual;", params="")) == []
+    assert lint_query(q("SELECT DBMS_XPLAN.DISPLAY_AWR('x') FROM dual", params="")) == []
+
+
+@pytest.mark.parametrize("key,val", [("sql_id", "x'; DROP TABLE t; --"), ("dbid", "1 OR 1=1")])
+def test_fill_rejects_injection(key, val):
+    vals = {"dbid": 1, "inst_id": 1, "begin_snap": 1, "end_snap": 2, "sql_id": "abcdefghij123", key: val}
+    with pytest.raises(ValueError):
+        fill(CAT["V-01"], vals)
+
+
+def test_fill_event_quote_doubled():
+    vals = {"dbid": 1, "inst_id": 1, "begin_snap": 1, "end_snap": 2, "event": "db file x"}
+    assert "event_name = 'db file x'" in fill(CAT["V-07"], vals)
+    assert "event_name = 'a''b'" in fill(CAT["V-07"], dict(vals, event="a'b"))
