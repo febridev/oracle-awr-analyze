@@ -73,3 +73,41 @@ def test_evidence_paths_resolve(sample_awr, cfg):
 def test_zero_db_time_is_idle(cfg):
     L = load_status(mini_awr(10, 60, 0, 50, 50), cfg["thresholds"])
     assert L["avg"]["status"] == "Idle" and L["notes"] == []
+
+
+def test_cpu_load_uses_peak_window_idle(cfg):
+    a = mini_awr(10, 300, 300, 80, 80)  # avg ratio 0.1, avg idle 80
+    a["addm"] = [{"avg_active_sessions": 15.0, "begin_time": "2026-01-01T01:00:00", "end_time": "2026-01-01T02:00:00"}]
+    a["os_detail"] = [{"snap_time": "2026-01-01T02:00:00", "busy_pct": 95, "iowait_pct": 1, "idle_pct": 5}]
+    L = load_status(a, cfg["thresholds"])
+    assert L["basis"] == "peak" and L["peak"]["os_idle_pct"] == 5
+    from analyze import rules_cpu
+    c = [x for x in rules_cpu(a, L, cfg["thresholds"], "san") if x["subject"] == "host cpu"]
+    assert [x["rule"] for x in c] == ["cpu.load.p1"] and c[0]["evidence"][1]["path"] == "os_detail[0].idle_pct"
+
+
+def test_resmgr_shares_event_subject(cfg):
+    a = fixture("idle")
+    a["fg_events"] = [{"event": "resmgr:cpu quantum", "pct_db_time": 8, "avg_wait_ms": 5.0}]
+    got = [c for c in run(a, cfg) if "resmgr" in c["subject"]]
+    assert {c["rule"] for c in got} == {"cpu.resmgr.p2", "event.share.p2"}
+    assert {(c["domain"], c["subject"]) for c in got} == {("events", "resmgr:cpu quantum")}
+
+
+def test_config_param_fires_on_presence(cfg):
+    a = fixture("idle")
+    a["parameters"] = {"_fix_control": {"begin": "x", "end": None}, "cursor_sharing": {"begin": "FORCE", "end": None},
+                       "db_block_size": {"begin": "8192", "end": None}}
+    got = [c for c in run(a, cfg) if c["domain"] == "config"]
+    assert sorted(c["subject"] for c in got) == ["_fix_control", "cursor_sharing"]
+    assert got[0]["evidence"][0]["path"].endswith(".begin")
+
+
+def test_sum_rules_exclude_generic_share(cfg):
+    got = run(fixture("lock_contention"), cfg)
+    assert not [c for c in got if c["subject"].startswith("enq:")]
+    ev = [c for c in got if c["domain"] == "concurrency"][0]["evidence"]
+    assert ev[0]["path"] == "fg_events[0].pct_db_time" and ev[-1]["path"] == "derived.concurrency_pct"
+    a = fixture("idle")
+    a["fg_events"] = [{"event": "SQL*Net message to client", "pct_db_time": 12, "avg_wait_ms": 0.1}]
+    assert [(c["domain"], c["subject"], c["severity"]) for c in run(a, cfg)] == [("network", "sql*net client", "P3")]

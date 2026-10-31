@@ -11,7 +11,9 @@ load:
 # ---- domain rules (Task 8). Every rule: severity, load_based, verify_sql, fallback + its own threshold fields. ----
 swap_out_mb_per_hour: 10
 min_pct_db_time: 1.0                      # event latency rules ignore events below this share
-event_share_exclude: ["control file sequential read"]   # has its own P3 rule
+event_share_exclude: ["control file sequential read", "library cache: mutex X", "cursor: pin S wait on X",   # own rules / sum rules
+  "enq: TX - row lock contention", "enq: TM*", "buffer busy waits", "latch: cache buffers chains", "library cache lock",
+  "SQL*Net more data to client", "SQL*Net message to client"]
 monitoring_categories: [monitoring, maintenance]
 watch_params: [optimizer_mode, optimizer_index_cost_adj, optimizer_features_enable, cursor_sharing, db_file_multiblock_read_count]
 mutex_events: ["library cache: mutex X", "cursor: pin S wait on X"]

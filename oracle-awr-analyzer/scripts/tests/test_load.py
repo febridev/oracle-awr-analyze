@@ -8,7 +8,7 @@ def test_sample_load(sample_awr, cfg):
     L = load_status(sample_awr, cfg["thresholds"])
     assert L["avg"]["aas"] == 7.12 and L["avg"]["load_ratio"] == 0.21 and L["avg"]["status"] == "Normal"
     assert L["peak"] == {"aas": 31.79, "load_ratio": 0.93, "status": "Busy", "begin": "2026-10-28T22:00:00",
-                         "end": "2026-10-28T23:00:00", "source": "addm", "os_busy_pct": 26.57, "os_iowait_pct": 14.49}
+                         "end": "2026-10-28T23:00:00", "source": "addm", "os_busy_pct": 26.57, "os_iowait_pct": 14.49, "os_idle_pct": 73.43}
     assert L["basis"] == "peak" and L["bottleneck"] == "wait_bound" and L["top_wait_class"] == "User I/O"
 
 

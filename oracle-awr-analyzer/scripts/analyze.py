@@ -21,7 +21,7 @@ def _peak(awr: dict, t: dict, cpus: float) -> dict | None:
     os_row = next((r for r in awr.get("os_detail") or [] if r["snap_time"] >= a["end_time"]), None) or {}
     return {"aas": aas, "load_ratio": ratio, "status": _status(ratio, L["bands"]), "begin": a["begin_time"],
             "end": a["end_time"], "source": "addm", "os_busy_pct": os_row.get("busy_pct"),
-            "os_iowait_pct": os_row.get("iowait_pct"), "_idle_pct": os_row.get("idle_pct")}
+            "os_iowait_pct": os_row.get("iowait_pct"), "os_idle_pct": os_row.get("idle_pct")}
 
 
 def load_status(awr: dict, t: dict) -> dict:
@@ -42,7 +42,7 @@ def load_status(awr: dict, t: dict) -> dict:
     aas = round(dbt / elapsed, 2)
     ratio = round(aas / cpus, 2)
     peak = _peak(awr, t, cpus)
-    peak_idle = peak.pop("_idle_pct") if peak else None
+    peak_idle = peak["os_idle_pct"] if peak else None
     use_peak = peak is not None and peak["load_ratio"] > ratio
     basis_ratio = peak["load_ratio"] if use_peak else ratio
     idle = peak_idle if use_peak and peak_idle is not None else host_idle
@@ -154,26 +154,30 @@ def _sum_cand(awr, t, domain, subject, title, ids, key, pats, pred):
     rid = _tier(t, ids, lambda r: pct >= r["pct_min"] and pred(r))
     if not rid:
         return []
-    ev = [_ev("Combined % DB time", pct, "Foreground Wait Events", f"derived.{key}")]
-    ev += [_ev(e["event"], _pct(e), "Foreground Wait Events", f"fg_events[{i}].pct_db_time") for i, e in hits]
+    ev = [_ev(e["event"], _pct(e), "Foreground Wait Events", f"fg_events[{i}].pct_db_time") for i, e in hits]
+    ev.append(_ev("Combined % DB time", pct, "Foreground Wait Events", f"derived.{key}"))
     return [_cand(domain, subject, title, rid, t, ev, pct)]
 
 
 def rules_cpu(awr, L, t, storage):
     out, d = [], awr.setdefault("derived", {})
     basis = L["peak"] if L["basis"] == "peak" else L["avg"]
-    ratio, idle = basis["load_ratio"], (awr.get("host_cpu") or {}).get("idle_pct")  # shortcut: avg-window idle even on peak basis, use ADDM-window idle if needed
+    ratio, idle = basis["load_ratio"], (awr.get("host_cpu") or {}).get("idle_pct")
+    idle_ev = _ev("Host idle %", idle, "Host CPU", "host_cpu.idle_pct")
+    if L["basis"] == "peak" and L["peak"].get("os_idle_pct") is not None:  # peak window: idle from its OS Detail row
+        k = next(i for i, r in enumerate(awr["os_detail"]) if r["snap_time"] >= L["peak"]["end"])
+        idle = L["peak"]["os_idle_pct"]
+        idle_ev = _ev("Host idle % (peak window)", idle, "OS Detail", f"os_detail[{k}].idle_pct")
     if ratio is not None:
         d["aas"], d["load_ratio"] = basis["aas"], ratio
         rid = idle is not None and _tier(t, ["cpu.load.p0", "cpu.load.p1"], lambda r: ratio >= r["load_ratio_min"] and idle < r["host_idle_max_pct"])
         if rid:
             out.append(_cand("cpu", "host cpu", "Host CPU is saturated", rid, t,
-                             [_ev("Load ratio (AAS / CPUs)", ratio, "Load", "derived.load_ratio"),
-                              _ev("Host idle %", idle, "Host CPU", "host_cpu.idle_pct")]))
+                             [_ev("Load ratio (AAS / CPUs)", ratio, "Load", "derived.load_ratio"), idle_ev]))
     r = t["rules"]["cpu.resmgr.p2"]
     i, e = _find(awr, t, r["event"])
     if e and _pct(e) >= r["pct_min"]:
-        out.append(_cand("cpu", r["event"], "Resource Manager is throttling CPU", "cpu.resmgr.p2", t,
+        out.append(_cand("events", r["event"], "Resource Manager is throttling CPU", "cpu.resmgr.p2", t,
                          [_ev("% DB time", _pct(e), "Foreground Wait Events", f"fg_events[{i}].pct_db_time")], _pct(e)))
     return out
 
@@ -213,7 +217,7 @@ def rules_redo(awr, L, t, storage):
     i, e = _find(awr, t, r["event"])
     if e and _pct(e) >= r["pct_min"]:
         top = max(_fg(awr, t), key=lambda x: _pct(x[1]))[1] is e
-        out.append(_cand("redo", r["event"], "Sessions wait for checkpoint completion",
+        out.append(_cand("events", r["event"], "Sessions wait for checkpoint completion",
                          "redo.ckpt.p0" if top else "redo.ckpt.p1", t,
                          [_ev("% DB time", _pct(e), "Foreground Wait Events", f"fg_events[{i}].pct_db_time")], _pct(e)))
     return out
@@ -261,7 +265,7 @@ def rules_events(awr, L, t, storage):
                 out.append(_cand("events", name, "Control file reads take a visible share", "event.ctrlfile.p3", t,
                                  [_ev("% DB time", pct, "Foreground Wait Events", f"fg_events[{i}].pct_db_time")], pct))
             continue
-        if name in t["event_share_exclude"]:
+        if _match(name, t["event_share_exclude"]):
             continue
         rid = _tier(t, ["event.share.p0", "event.share.p1", "event.share.p2"],
                     lambda r: pct >= r["pct_min"] and (crit or not r.get("needs_latency_crit")))
@@ -297,9 +301,10 @@ def rules_monitoring(awr, L, t, storage):
 def rules_config(awr, L, t, storage):
     out = []
     for name, v in (awr.get("parameters") or {}).items():
-        if v.get("end") is not None and v["end"] != v.get("begin") and (name.startswith("_") or name in t["watch_params"]):
-            out.append(_cand("config", name, f"Parameter {name} was changed", "config.param.p4", t,
-                             [_ev("Value at end", v["end"], "Init.ora Parameters", f"parameters.{name}.end")]))
+        if name.startswith("_") or name in t["watch_params"]:  # section lists only non-default params
+            side = "end" if v.get("end") else "begin"
+            out.append(_cand("config", name, f"Parameter {name} is set", "config.param.p4", t,
+                             [_ev("Value", v[side], "Init.ora Parameters", f"parameters.{name}.{side}")]))
     rows = (awr.get("advisories") or {}).get("sga_target") or []
     r = t["rules"]["config.sga_advisory.p4"]
     cur = next((x for x in rows if x["sga_size_factor"] == 1), None)
