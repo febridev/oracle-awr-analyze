@@ -56,6 +56,16 @@ SECTIONS = {
     "db_instance": (r"database instance information",),
     "host": (r"host information",),
     "snapshot": (r"snapshot information",),
+    "load_profile": (r"^This table displays load profile",),
+    "efficiency": (r"instance efficiency percentages",),
+    "top_events": (r"top 10 wait events by total wait time",),
+    "time_model": (r"different time model statistics",),
+    "host_cpu": (r"system load statistics",),
+    "instance_cpu": (r"CPU usage and wait statistics",),
+    "os_stats": (r"operating systems statistics\. For each statistic",),
+    "memory": (r"^This table displays memory statistics",),
+    "io_profile": (r"^This table displays IO profile",),
+    "iostat_function": (r"IO Statistics for different functions",),
 }
 
 
@@ -183,3 +193,141 @@ def extract_meta(doc: Doc) -> dict:
         "elapsed_min": mins("elapsed"), "db_time_min": mins("db time"),
         "restart": restart, "parser": doc.parser, "decimal": decimal, "notes": notes,
     }
+
+
+class Ctx:
+    """Shared extraction state: the parsed doc, number locale, and problems found."""
+
+    def __init__(self, doc: Doc, decimal: str = "."):
+        self.doc, self.decimal = doc, decimal
+        self.missing: list = []
+        self.invalid: list = []
+
+    def missing_section(self, key: str, reason: str) -> None:
+        self.missing.append({"section": key, "reason": reason})
+
+    def check_pct(self, path: str, value: Optional[float]) -> Optional[float]:
+        if value is not None and not 0 <= value <= 100:
+            self.invalid.append({"path": path, "raw": "%g" % value, "reason": "outside 0-100"})
+            return None
+        return value
+
+    def table(self, key: str) -> Optional[Tag]:
+        t = self.doc.find_table(key)
+        if t is None:
+            self.missing_section(key, "table not found")
+        return t
+
+    def n(self, text: Optional[str], unit: Optional[str] = None) -> Optional[float]:
+        return num(text, unit=unit, decimal=self.decimal)
+
+
+def _labeled(ctx: Ctx, key: str) -> Optional[list]:
+    """Rows of a header+label-column table as (slug(label), record); label key is col0."""
+    t = ctx.table(key)
+    if t is None:
+        return None
+    return [(slug(r.get("col0", "")), r) for r in records(t) if r.get("col0")]
+
+
+def extract_load_profile(ctx: Ctx) -> Optional[dict]:
+    rows = _labeled(ctx, "load_profile")
+    if rows is None:
+        return None
+    return {k: {"per_s": ctx.n(r.get("per_second")), "per_txn": ctx.n(r.get("per_transaction"))}
+            for k, r in rows}
+
+
+def extract_efficiency(ctx: Ctx) -> Optional[dict]:
+    t = ctx.table("efficiency")
+    if t is None:
+        return None
+    out = {}
+    for row in table_rows(t):  # no header row: label, value, label, value
+        for i in range(0, len(row) - 1, 2):
+            if row[i]:
+                k = slug(row[i])
+                v = ctx.n(row[i + 1])
+                out[k] = ctx.check_pct("efficiency." + k, v) if k.endswith("_pct") else v
+    return out
+
+
+def extract_top_events(ctx: Ctx) -> Optional[list]:
+    t = ctx.table("top_events")
+    if t is None:
+        return None
+    return [{"event": r.get("event"), "waits": ctx.n(r.get("waits")),
+             "total_wait_s": ctx.n(r.get("total_wait_time_sec"), "s"),
+             "avg_wait_ms": ctx.n(r.get("avg_wait"), "ms"), "pct_db_time": ctx.n(r.get("pct_db_time")),
+             "wait_class": r.get("wait_class") or None}
+            for r in records(t) if r.get("event")]
+
+
+def extract_time_model(ctx: Ctx) -> Optional[dict]:
+    t = ctx.table("time_model")
+    if t is None:
+        return None
+    return {slug(r["statistic_name"]): {"time_s": ctx.n(r.get("time_s")),
+                                        "pct_db_time": ctx.n(r.get("pct_of_db_time"))}
+            for r in records(t) if r.get("statistic_name")}
+
+
+def _one_row(ctx: Ctx, key: str, cols: dict) -> Optional[dict]:
+    t = ctx.table(key)
+    if t is None:
+        return None
+    rec = next(iter(records(t)), {})
+    out = {}
+    for name, src in cols.items():
+        v = ctx.n(rec.get(src))
+        out[name] = ctx.check_pct("%s.%s" % (key, name), v) if name.endswith("_pct") else v
+    return out
+
+
+def extract_host_cpu(ctx: Ctx) -> Optional[dict]:
+    return _one_row(ctx, "host_cpu", {
+        "cpus": "cpus", "cores": "cores", "sockets": "sockets", "load_begin": "load_average_begin",
+        "load_end": "load_average_end", "user_pct": "pctuser", "system_pct": "pctsystem",
+        "wio_pct": "pctwio", "idle_pct": "pctidle"})
+
+
+def extract_instance_cpu(ctx: Ctx) -> Optional[dict]:
+    return _one_row(ctx, "instance_cpu", {
+        "total_cpu_pct": "pcttotal_cpu", "busy_cpu_pct": "pctbusy_cpu",
+        "db_time_waiting_cpu_rm_pct": "pctdb_time_waiting_for_cpu_resource_manager"})
+
+
+def extract_os_stats(ctx: Ctx) -> Optional[dict]:
+    t = ctx.table("os_stats")
+    if t is None:
+        return None
+    return {r["statistic"]: {"value": ctx.n(r.get("value")), "end_value": ctx.n(r.get("end_value"))}
+            for r in records(t) if r.get("statistic")}
+
+
+def extract_memory(ctx: Ctx) -> Optional[dict]:
+    rows = _labeled(ctx, "memory")
+    if rows is None:
+        return None
+    out = {}
+    for k, r in rows:
+        f = (lambda v: ctx.check_pct("memory.%s" % k, v)) if k.endswith("_pct") or k.startswith("pct_") \
+            else (lambda v: v)
+        out[k] = {"begin": f(ctx.n(r.get("begin"))), "end": f(ctx.n(r.get("end")))}
+    return out
+
+
+def extract_io_profile(ctx: Ctx) -> Optional[dict]:
+    rows = _labeled(ctx, "io_profile")
+    if rows is None:
+        return None
+    return {k: {"rw_per_s": ctx.n(r.get("read_write_per_second")), "r_per_s": ctx.n(r.get("read_per_second")),
+                "w_per_s": ctx.n(r.get("write_per_second"))} for k, r in rows}
+
+
+def extract_iostat_function(ctx: Ctx) -> Optional[list]:
+    t = ctx.table("iostat_function")
+    if t is None:
+        return None
+    return [{k: (v if k == "function_name" else ctx.n(v, "ms")) for k, v in r.items()}
+            for r in records(t) if r.get("function_name")]
