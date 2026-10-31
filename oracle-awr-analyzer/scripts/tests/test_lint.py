@@ -1,5 +1,5 @@
 import pytest
-from common import SKILL_DIR
+from common import SKILL_DIR, load_yaml
 from lint_verify_sql import load_catalog, lint_query, fill, main
 
 CAT = load_catalog(SKILL_DIR / "references/verify_sql")
@@ -114,3 +114,20 @@ def test_fill_rejects_unicode_digits():
 
 def test_single_line_literals_accepted():
     assert lint_query(q("SELECT 'a / b', q'[x . y]' FROM dual;", params="")) == []
+
+
+def test_unknown_rule_verify_id():
+    from lint_verify_sql import lint_thresholds
+    thr = {"rules": {"a.b": {"verify_sql": ["V-01", "V-99"]}}}
+    assert lint_thresholds(thr, CAT) == ["rule a.b: unknown verify_sql id V-99"]
+    assert lint_thresholds(load_yaml(SKILL_DIR / "references/thresholds.yaml"), CAT) == []
+
+
+def test_run_sql_must_match_catalog():
+    from lint_verify_sql import lint_run
+    vals = {"dbid": 1, "inst_id": 1, "begin_snap": 1, "end_snap": 2, "sql_id": "abcdefghij123"}
+    ok = {"findings": [{"id": "F01", "verify_sql": [{"id": "V-01", "available": True, "sql": fill(CAT["V-01"], vals)},
+                                                    {"id": "V-02", "available": False, "sql": None}]}]}
+    assert lint_run(ok, CAT) == []
+    bad = {"findings": [{"id": "F01", "verify_sql": [{"id": "V-01", "available": True, "sql": "SELECT 1 FROM dual"}]}]}
+    assert len(lint_run(bad, CAT)) == 1

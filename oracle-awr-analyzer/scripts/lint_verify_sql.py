@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-from common import SKILL_DIR
+from common import SKILL_DIR, load_yaml, read_json
 
 REQUIRED = ("id", "title", "domain", "min_version", "license", "params")
 LICENSES = {"none", "diagnostics_pack", "tuning_pack"}
@@ -103,13 +103,43 @@ def fill(q: dict, values: dict) -> str:
     return sql
 
 
+def lint_thresholds(thr: dict, catalog: dict) -> list:
+    ids = {q.get("id") for q in catalog.values()}
+    return [f"rule {rid}: unknown verify_sql id {v}" for rid, r in (thr.get("rules") or {}).items()
+            for v in r.get("verify_sql") or [] if v not in ids]
+
+
+def lint_run(findings: dict, catalog: dict) -> list:
+    """Every available verify query in findings.json must be its catalog query with only parameters substituted."""
+    by_id = {q.get("id"): q for q in catalog.values()}
+    errs = []
+    for f in findings.get("findings") or []:
+        for v in f.get("verify_sql") or []:
+            if not v.get("available"):
+                continue
+            q = by_id.get(v["id"])
+            if q is None:
+                errs.append(f"{f['id']}: {v['id']} not in catalog")
+                continue
+            pat = re.sub(r"\\&(\w+)", "(?s:.+?)", re.escape(q["sql"]))  # shortcut: parameter text may contain anything; fill() already validated it
+            if not re.fullmatch(pat, v.get("sql") or ""):
+                errs.append(f"{f['id']}: {v['id']} SQL does not match the catalog")
+    return errs
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--catalog", type=Path, default=SKILL_DIR / "references" / "verify_sql")
-    # Task 9 adds --thresholds and --run here.
+    ap.add_argument("--thresholds", type=Path)
+    ap.add_argument("--run", type=Path, help="run folder whose findings.json is checked against the catalog")
     args = ap.parse_args(argv)
     errors = []
-    for key, q in load_catalog(args.catalog).items():
+    cat = load_catalog(args.catalog)
+    if args.thresholds:
+        errors += lint_thresholds(load_yaml(args.thresholds), cat)
+    if args.run:
+        errors += lint_run(read_json(args.run / "findings.json"), cat)
+    for key, q in cat.items():
         if key.endswith("+dup"):
             errors.append(f"{q.get('id')}: duplicate id")
         errors += [f"{q.get('id', key)}: {e}" for e in lint_query(q)]

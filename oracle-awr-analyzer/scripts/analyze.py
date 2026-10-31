@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import argparse
+import re
+import sys
+from pathlib import Path
+
+from common import SKILL_DIR, ConfigError, load_config, read_json, write_json
+from lint_verify_sql import fill, load_catalog
+
 _STATUSES = ("Idle", "Normal", "Busy", "Saturated", "Critical")
 
 
@@ -325,3 +333,181 @@ _DOMAINS = (rules_cpu, rules_memory, rules_io, rules_redo, rules_parse, rules_co
 def all_candidates(awr: dict, L: dict, cfg: dict) -> list:
     t, storage = cfg["thresholds"], cfg["storage_profile"]
     return [c for f in _DOMAINS for c in f(awr, L, t, storage)]
+
+
+# ---------------------------------------------------------------- finalize (spec 5.2)
+
+_SEV = ("P0", "P1", "P2", "P3", "P4")
+_CONF = ("low", "medium", "high")
+
+
+def _merge(cands):
+    out: dict = {}
+    for c in cands:
+        f = out.setdefault((c["domain"], c["subject"]), {
+            "domain": c["domain"], "subject": c["subject"], "title": c["title"], "severity": c["severity"],
+            "triggered_by": [], "load_based": False, "evidence": [], "pct_db_time": None, "latency_ok": False,
+            "confidence": None})
+        if c["severity"] < f["severity"]:
+            f["severity"], f["title"] = c["severity"], c["title"]
+        f["triggered_by"].append(c["rule"])
+        f["load_based"] |= c["load_based"]
+        f["latency_ok"] |= bool(c["latency_ok"])
+        f["evidence"] += [e for e in c["evidence"] if e not in f["evidence"]]
+        if c["pct_db_time"] is not None:
+            f["pct_db_time"] = max(c["pct_db_time"], f["pct_db_time"] or 0)
+    return list(out.values())
+
+
+def _class_conf(f, awr, t):  # confidence of the SQL classification a finding relies on
+    sql = {s["sql_id"]: s for s in awr.get("sql") or []}
+    if f["domain"] == "sql":
+        picks = [sql.get(f["subject"], {})]
+    elif f["domain"] == "monitoring":
+        picks = [s for s in sql.values() if s.get("category") in t["monitoring_categories"]]
+    else:
+        return "high"
+    return min((p.get("confidence") or "high" for p in picks), key=_CONF.index, default="high")
+
+
+def _vals(f, awr):
+    m = awr["meta"]
+    v = {"dbid": m.get("dbid"), "inst_id": m.get("inst_num"), "begin_snap": m.get("begin_snap"),
+         "end_snap": m.get("end_snap")}
+    if f["domain"] == "sql":
+        v["sql_id"] = f["subject"]
+    if any(e.get("event") == f["subject"] for e in awr.get("fg_events") or []):
+        v["event"] = f["subject"]
+    return v
+
+
+def _ver(rel):
+    m = re.match(r"(\d+)\.(\d+)", str(rel or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _verify(f, rule_ids, awr, t, catalog):
+    by_id = {q.get("id"): q for q in catalog.values()}
+    have, vals, out = _ver(awr["meta"].get("release")), _vals(f, awr), []
+    for vid in dict.fromkeys(v for r in rule_ids for v in t["rules"][r].get("verify_sql") or []):
+        q = by_id.get(vid)
+        e = {"id": vid, "title": q and q.get("title"), "sql": None, "license": q and q.get("license"), "available": False}
+        if q is None:
+            e["reason"] = "not in the verification catalog"
+        elif have and have < _ver(q.get("min_version")):
+            e["reason"] = f"needs Oracle {q['min_version']} or later"
+        elif (miss := [p for p in q["params"] if vals.get(p) is None]):
+            e["reason"] = f"no value for {', '.join(miss)} in this finding"
+        else:
+            try:
+                e["sql"], e["available"] = fill(q, vals), True
+            except ValueError as ex:  # R13: never emit unfilled or unsafe text
+                e["reason"] = f"cannot fill safely: {ex}"
+        out.append(e)
+    return out
+
+
+def finalize(cands: list, awr: dict, L: dict, cfg: dict, catalog: dict) -> list:
+    t, meta = cfg["thresholds"], awr["meta"]
+    fs = _merge(cands)
+    # 2. drop idle events and sub-1% findings
+    fs = [f for f in fs if not idle_event(f["subject"], t) and not (
+        f["pct_db_time"] is not None and f["pct_db_time"] < t["min_pct_db_time"]
+        and not set(f["triggered_by"]) & set(t["min_pct_exempt"]))]
+    # 3. caps
+    elapsed = meta.get("elapsed_min")
+    quiet = L["idle"] or (elapsed is not None and elapsed < t["load"]["short_period_min"])
+    for f in fs:
+        f["capped"] = False
+        if quiet and f["load_based"] and f["severity"] < "P3":
+            f["severity"], f["confidence"], f["capped"] = "P3", "low", True
+        elif f["latency_ok"] and f["severity"] < "P2":  # big share, healthy latency: volume, not storage
+            f["severity"] = "P2"
+    # 4. escalation
+    io_crit = any(r.endswith(".crit") and f["domain"] == "io" for f in fs for r in f["triggered_by"])
+    user_io = {s["sql_id"] for s in awr.get("sql") or [] if s.get("by_user_io")}
+    for f in fs:
+        if io_crit and f["domain"] == "sql" and f["subject"] in user_io and not f["capped"]:
+            f["severity"] = _SEV[max(_SEV.index(f["severity"]) - 1, 0)]
+    # 5. confidence (restart → low), 6. sort + number
+    for f in fs:
+        if not f["confidence"]:
+            f["confidence"] = "low" if meta.get("restart") else _class_conf(f, awr, t)
+        f["triggered_by"].sort(key=lambda r: t["rules"][r]["severity"])
+        f["verify_sql"] = _verify(f, f["triggered_by"], awr, t, catalog)
+        f["fallback"] = t["rules"][f["triggered_by"][0]]["fallback"]
+        del f["capped"], f["latency_ok"]
+    fs.sort(key=lambda f: (f["severity"], -(f["pct_db_time"] or 0), f["subject"]))
+    for i, f in enumerate(fs, 1):
+        f["id"] = f"F{i:02d}"
+    return fs
+
+
+def diff_decision(findings, L, awr, cfg, comparison_mentioned: bool) -> dict:
+    d = cfg["thresholds"].get("diff") or {}
+    norms = dict(d.get("workload_norms") or {}, **{k: v for k, v in (cfg.get("workload_norms") or {}).items() if v is not None})
+    status = ((L["peak"] if L["basis"] == "peak" else L["avg"]) or {}).get("status")
+    reasons = ["a comparison was mentioned by the user"] if comparison_mentioned else []
+    if not L["idle"]:
+        if any(f["severity"] in ("P0", "P1") and f["domain"] != "config" for f in findings):
+            reasons.append("a P0/P1 finding outside configuration is present")
+        if status in ("Saturated", "Critical"):
+            lp = awr.get("load_profile") or {}
+            now = {"executes_per_s": (lp.get("executes_sql") or {}).get("per_s"), "txn_per_s": (lp.get("transactions") or {}).get("per_s")}
+            set_ = {k: v for k, v in norms.items() if v is not None}
+            if not set_:
+                reasons.append(f"load status is {status} and no workload norms are configured")
+            elif all(now.get(k) is not None and now[k] <= v for k, v in set_.items()):
+                reasons.append(f"load status is {status} while the workload is within the configured norms")
+    return {"suggested": bool(reasons), "reasons": reasons}
+
+
+def _sql_summary(awr, t):
+    sqls = sorted(awr.get("sql") or [], key=lambda s: -((s.get("by_elapsed") or {}).get("pct_total") or 0))
+    by_cat: dict = {}
+    for s in sqls:
+        by_cat.setdefault(s.get("category") or "unknown", []).append(s["sql_id"])
+    cpu = sum((s.get("by_cpu") or {}).get("pct_total") or 0 for s in sqls if s.get("category") in t["monitoring_categories"])
+    return {"by_category": by_cat, "monitoring_overhead_pct": awr["derived"]["monitoring_overhead_pct"],
+            "monitoring_overhead_cpu_pct": round(cpu, 2)}
+
+
+def _notes(awr, L, cfg):
+    m, n = awr["meta"], list(L["notes"])
+    if cfg["storage_assumed"]:
+        n.append(f"storage profile '{cfg['storage_profile']}' assumed; set storage_profile in the config to change latency thresholds")
+    if m.get("restart"):
+        n.append("instance restarted during the period; confidence lowered")
+    if m.get("rac"):
+        n.append("RAC sections not analyzed in v1")
+    if L["hyperthreading"]:
+        n.append("CPU count is much higher than core count (hyperthreading); load ratio uses logical CPUs")
+    return n + list(m.get("notes") or [])
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Turn awr.json into findings.json")
+    ap.add_argument("run_dir")
+    ap.add_argument("--config")
+    ap.add_argument("--comparison-mentioned", action="store_true")
+    a = ap.parse_args(argv)
+    try:
+        cfg = load_config(Path(a.config) if a.config else None)
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+    run = Path(a.run_dir)
+    awr = read_json(run / "awr.json")
+    L = load_status(awr, cfg["thresholds"])
+    cands = all_candidates(awr, L, cfg)
+    findings = finalize(cands, awr, L, cfg, load_catalog(SKILL_DIR / "references" / "verify_sql"))
+    write_json(run / "findings.json", {
+        "load": L, "findings": findings, "sql_summary": _sql_summary(awr, cfg["thresholds"]),
+        "diff": diff_decision(findings, L, awr, cfg, a.comparison_mentioned), "notes": _notes(awr, L, cfg),
+        "storage_profile": cfg["storage_profile"], "audience": cfg["audience"]})
+    write_json(run / "awr.json", awr)  # carries the derived values
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

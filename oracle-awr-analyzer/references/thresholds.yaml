@@ -328,3 +328,9 @@ rules:
       cause: The SGA advisor estimates that a larger SGA would reduce database time noticeably. The current size may be limiting the cache.
       impact: More physical reads than necessary may be happening, but the advisor estimate is only a guide.
       recommendation: Check whether the host has memory to spare. If it does, test a larger SGA target and compare the results.
+
+min_pct_exempt: []                        # rule ids that survive the 1% DB-time drop in finalize()
+
+diff:
+  workload_norms: {executes_per_s: null, txn_per_s: null}   # upper bounds; unset = Saturated/Critical alone suggests a diff
+  duration_diff_pct: 20                   # comparison warning threshold (report)
