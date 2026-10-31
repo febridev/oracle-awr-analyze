@@ -7,3 +7,322 @@ load:
   long_period_min: 120
   short_period_min: 10
   hyperthreading_ratio: 1.5      # cpus / cores above this → note
+
+# ---- domain rules (Task 8). Every rule: severity, load_based, verify_sql, fallback + its own threshold fields. ----
+swap_out_mb_per_hour: 10
+min_pct_db_time: 1.0                      # event latency rules ignore events below this share
+event_share_exclude: ["control file sequential read"]   # has its own P3 rule
+monitoring_categories: [monitoring, maintenance]
+watch_params: [optimizer_mode, optimizer_index_cost_adj, optimizer_features_enable, cursor_sharing, db_file_multiblock_read_count]
+mutex_events: ["library cache: mutex X", "cursor: pin S wait on X"]
+concurrency_events: ["enq: TX - row lock contention", "enq: TM*", "buffer busy waits", "latch: cache buffers chains", "library cache lock"]
+network_events: ["SQL*Net more data to client", "SQL*Net message to client"]
+idle_events: ["SQL*Net message from client", "rdbms ipc message", "pmon timer", "smon timer", "jobq slave wait", "Streams AQ:*",
+  "class slave wait", "PL/SQL lock timer", "Space Manager: slave idle wait", "wait for unread message on broadcast channel",
+  "LGWR worker group idle", "watchdog main loop", "pipe get", "heartbeat redo informer", "lreg timer", "AQPC idle",
+  "fbar timer", "VKTM Logical Idle Wait", "DIAG idle wait", "Data Guard: Timer", "shared server idle wait",
+  "dispatcher timer", "virtual circuit next request"]
+latency_events: {db file sequential read: io.seq_read, db file scattered read: io.multi_read, direct path read: io.multi_read, log file sync: redo.lfs}
+
+rules:
+  cpu.load.p1:
+    severity: P1
+    load_based: true
+    load_ratio_min: 1.0
+    host_idle_max_pct: 10
+    verify_sql: [V-04, V-05]
+    fallback: &fb_cpu_load
+      cause: The database workload needs at least as much CPU as the host has, and the host has almost no idle CPU left. Sessions are queuing for a processor.
+      impact: Every statement runs slower because it waits for CPU time before it can do real work. Response time gets worse as more sessions arrive.
+      recommendation: Find the statements using the most CPU and tune them first. If the demand is legitimate, plan more CPU capacity or move non-database work off the host.
+  cpu.load.p0:
+    severity: P0
+    load_based: true
+    load_ratio_min: 2.0
+    host_idle_max_pct: 5
+    verify_sql: [V-04, V-05]
+    fallback: *fb_cpu_load
+  cpu.resmgr.p2:
+    severity: P2
+    load_based: true
+    event: "resmgr:cpu quantum"
+    pct_min: 5
+    verify_sql: [V-05]
+    fallback:
+      cause: The Resource Manager is holding sessions back to enforce a CPU limit. They wait for a time slice even though the host may have CPU to spare.
+      impact: Sessions in the limited consumer group run slower than the hardware would allow. Users of that group see delays that do not show up as host CPU use.
+      recommendation: Review the active resource plan and the CPU limits of the consumer groups involved. Raise the limit or move the work to a group with a larger share if the throttling is not intended.
+  mem.swap.p1:
+    severity: P1
+    load_based: false
+    verify_sql: [V-06]
+    fallback: &fb_swap
+      cause: The operating system is moving memory pages out to swap space at a steady rate. The host does not have enough free memory for everything running on it.
+      impact: Pages of the database memory may be written to disk and read back, which makes both reads and writes much slower. Latency becomes unpredictable.
+      recommendation: Check what is using memory on the host and compare the SGA and PGA sizes with physical memory. Reduce memory targets or add memory, and verify the trend over time.
+  mem.swap.p3:
+    severity: P3
+    load_based: false
+    verify_sql: [V-06]
+    fallback:
+      cause: A small amount of memory was swapped out during the period. This is usually left over from an earlier memory shortage or from idle processes.
+      impact: There is no clear performance effect at this volume. It may become one if the swap-out rate grows.
+      recommendation: Verify the swap trend over several reports before acting. Act only if the rate is rising.
+  mem.sga_pga.p2:
+    severity: P2
+    load_based: false
+    pct_gt: 90
+    verify_sql: [V-06, V-16]
+    fallback:
+      cause: The SGA and PGA together take almost all physical memory on the host. Little room is left for the operating system and other processes.
+      impact: Any growth in PGA use or in other processes can push the host into swapping. That slows the whole database.
+      recommendation: Lower the memory targets or add physical memory so there is a safe margin. Check PGA growth for sessions that use unusually much.
+  mem.multipass.p3:
+    severity: P3
+    load_based: false
+    verify_sql: [V-06]
+    fallback:
+      cause: Some sorts or hash joins did not fit in their work area and had to spill to temporary space in several passes. The PGA target is too small for those operations.
+      impact: The affected statements run slower because they repeatedly read and write temporary data.
+      recommendation: Find the statements that spill and check whether they need that much memory. Consider a larger PGA target if the PGA advisory supports it.
+  io.seq_read.warn:
+    severity: P2
+    load_based: true
+    event: db file sequential read
+    ms: {flash: 3, hdd: 10, san: 10}
+    verify_sql: [V-07, V-08, V-09]
+    fallback: &fb_seq
+      cause: Single-block reads take longer than the storage profile is expected to deliver. The storage may be busy, or the reads may be queuing behind other I/O.
+      impact: Index lookups and row fetches wait on disk for longer, so statements that touch many rows slow down. This shows up as a large share of database time.
+      recommendation: Check the storage side for queuing and bandwidth limits, and find the statements causing the most reads. Reducing the number of reads is often more effective than faster storage.
+  io.seq_read.crit:
+    severity: P1
+    load_based: true
+    event: db file sequential read
+    ms: {flash: 8, hdd: 20, san: 20}
+    verify_sql: [V-07, V-08, V-09]
+    fallback: *fb_seq
+  io.multi_read.warn:
+    severity: P2
+    load_based: true
+    events: [db file scattered read, direct path read]
+    ms: {flash: 10, hdd: 20, san: 20}
+    verify_sql: [V-07, V-08, V-09]
+    fallback: &fb_multi
+      cause: Large multiblock or direct reads take longer than the storage profile is expected to deliver. The storage may be saturated by scans.
+      impact: Full scans and parallel queries take longer, and they can slow down other I/O sharing the same storage.
+      recommendation: Find the statements doing the largest scans and check whether indexes, partitioning or better plans can avoid them. Check storage throughput limits at the same time.
+  io.multi_read.crit:
+    severity: P1
+    load_based: true
+    events: [db file scattered read, direct path read]
+    ms: {flash: 20, hdd: 40, san: 40}
+    verify_sql: [V-07, V-08, V-09]
+    fallback: *fb_multi
+  redo.lfs.warn:
+    severity: P2
+    load_based: true
+    event: log file sync
+    ms: 10
+    verify_sql: [V-07, V-10]
+    fallback: &fb_lfs
+      cause: Sessions wait too long for the log writer to confirm that their commit is safely on disk. The redo log storage may be slow, or commits may be too frequent.
+      impact: Every commit takes longer, so transactions and batch jobs that commit often slow down.
+      recommendation: Check the redo log write latency and place the logs on the fastest storage available. Reduce the commit frequency in the application where it is practical.
+  redo.lfs.crit:
+    severity: P1
+    load_based: true
+    event: log file sync
+    ms: 20
+    verify_sql: [V-07, V-10]
+    fallback: *fb_lfs
+  redo.switch.warn:
+    severity: P3
+    load_based: false
+    per_hour_gt: 6
+    verify_sql: [V-03, V-10]
+    fallback: &fb_switch
+      cause: The redo logs switch more often than usual. The log files are small compared with the amount of redo the workload produces.
+      impact: Frequent switches force frequent checkpoints and archiving, which adds background I/O. In bad cases sessions wait for a log to become free.
+      recommendation: Size the redo logs so a switch happens every fifteen to thirty minutes at peak. Check the redo volume to see which jobs generate most of it.
+  redo.switch.crit:
+    severity: P2
+    load_based: false
+    per_hour_gt: 20
+    verify_sql: [V-03, V-10]
+    fallback: *fb_switch
+  redo.ckpt.p1:
+    severity: P1
+    load_based: true
+    event: "log file switch (checkpoint incomplete)"
+    pct_min: 1
+    verify_sql: [V-03, V-10]
+    fallback: &fb_ckpt
+      cause: The log writer needs to reuse a redo log, but the checkpoint has not yet written the changes protected by it. Sessions must wait until it finishes.
+      impact: Sessions that generate redo stall completely during the wait, which can freeze updates for short periods.
+      recommendation: Add redo log groups or make the log files larger so checkpoints have more time. Check that database writers keep up with the write load.
+  redo.ckpt.p0:
+    severity: P0
+    load_based: true
+    event: "log file switch (checkpoint incomplete)"
+    verify_sql: [V-03, V-10]
+    fallback: *fb_ckpt
+  parse.soft.warn:
+    severity: P3
+    load_based: false
+    pct_lt: 90
+    verify_sql: [V-11, V-12]
+    fallback: &fb_soft
+      cause: A noticeable share of parse calls are hard parses, so statements are being compiled again instead of reusing existing plans. The application often sends literals instead of bind variables.
+      impact: Hard parsing uses extra CPU and shared pool memory and can cause contention in the library cache.
+      recommendation: Change the application to use bind variables. As a short-term measure, consider forcing cursor sharing after testing it.
+  parse.soft.crit:
+    severity: P2
+    load_based: false
+    pct_lt: 80
+    verify_sql: [V-11, V-12]
+    fallback: *fb_soft
+  parse.hard_rate.p2:
+    severity: P2
+    load_based: true
+    per_s_min: 100
+    verify_sql: [V-11]
+    fallback:
+      cause: The database performs a very high number of hard parses every second. Most statements are being compiled from scratch.
+      impact: Compilation uses a lot of CPU and serializes work in the shared pool, which limits how many users the system can serve.
+      recommendation: Find the statements that differ only by literal values and convert them to use bind variables. Check the shared pool size once the parse rate has dropped.
+  parse.mutex.p1:
+    severity: P1
+    load_based: true
+    pct_min: 5
+    verify_sql: [V-11, V-12]
+    fallback:
+      cause: Sessions wait on library cache mutexes while parsing or opening cursors. Many sessions are working on the same cursors or creating many versions of them.
+      impact: Sessions queue behind each other, so response time grows quickly under load.
+      recommendation: Find the cursors with many versions or high parse counts and fix the statements or the application. Cursor caching in the session can also reduce the pressure.
+  parse.exec_to_parse.p3:
+    severity: P3
+    load_based: false
+    exec_lt: 50
+    soft_gt: 95
+    verify_sql: [V-12]
+    fallback:
+      cause: Statements are parsed again on almost every execution, although the parses are soft. The application does not keep its cursors open for reuse.
+      impact: Each soft parse costs a little CPU and latch time. At high volume this adds up.
+      recommendation: Have the application parse once and execute many times, or raise the session cursor cache. The effect is usually small.
+  conc.combined.p2:
+    severity: P2
+    load_based: true
+    pct_min: 5
+    verify_sql: [V-13]
+    fallback: &fb_conc
+      cause: Sessions are waiting on each other for locks, hot blocks or shared memory structures. The same rows, blocks or objects are used by many sessions at once.
+      impact: Throughput drops and response time grows because sessions queue even when CPU and disk are free.
+      recommendation: Find the blocking sessions and the objects involved. Shorten transactions and spread the access over more rows or blocks where the design allows.
+  conc.combined.p1:
+    severity: P1
+    load_based: true
+    pct_min: 15
+    verify_sql: [V-13]
+    fallback: *fb_conc
+  conc.combined.p0:
+    severity: P0
+    load_based: true
+    pct_min: 30
+    verify_sql: [V-13]
+    fallback: *fb_conc
+  net.client.p3:
+    severity: P3
+    load_based: true
+    pct_min: 10
+    verify_sql: [V-14]
+    fallback:
+      cause: A visible share of time goes to sending results to clients. Clients may be fetching large result sets, or the network or client may be slow to receive.
+      impact: Sessions stay busy longer than needed while data is sent, but the database itself is usually not the bottleneck.
+      recommendation: Check the fetch size and the amount of data returned by the top statements. Look at network latency between the application and the database if the waits stay high.
+  event.share.p2:
+    severity: P2
+    load_based: true
+    pct_min: 5
+    verify_sql: [V-07]
+    fallback: &fb_share
+      cause: One wait event takes a large share of the total database time. The workload spends much of its time waiting for the same resource.
+      impact: Reducing this wait is the most direct way to shorten response time. Other tuning will have a smaller effect.
+      recommendation: Identify the statements and objects behind this event, and look at the related rules for its cause. Confirm the finding with the verification query before changing anything.
+  event.share.p1:
+    severity: P1
+    load_based: true
+    pct_min: 15
+    verify_sql: [V-07]
+    fallback: *fb_share
+  event.share.p0:
+    severity: P0
+    load_based: true
+    pct_min: 30
+    needs_latency_crit: true
+    verify_sql: [V-07]
+    fallback: *fb_share
+  event.ctrlfile.p3:
+    severity: P3
+    load_based: true
+    event: control file sequential read
+    pct_min: 5
+    verify_sql: [V-07, V-01]
+    fallback:
+      cause: Control file reads take a noticeable share of time. This is often background work such as backups, archiving or many sessions checking the control file.
+      impact: Normally harmless, but a high share can mean frequent control file access caused by a job or a tool.
+      recommendation: Check which sessions and jobs read the control file most. Act only if the latency is also high.
+  sql.single.p3:
+    severity: P3
+    load_based: true
+    pct_min: 10
+    verify_sql: [V-01, V-17]
+    fallback: &fb_sql
+      cause: One statement accounts for a large share of the elapsed time of the whole database. Any improvement to it benefits the whole system.
+      impact: A single slow statement can dominate response time and use resources other users need.
+      recommendation: Review the plan and the number of executions of this statement. Tune it or reduce how often it runs, and confirm with the verification queries.
+  sql.single.p2:
+    severity: P2
+    load_based: true
+    pct_min: 20
+    verify_sql: [V-01, V-17]
+    fallback: *fb_sql
+  sql.single.p1:
+    severity: P1
+    load_based: true
+    pct_min: 40
+    verify_sql: [V-01, V-17]
+    fallback: *fb_sql
+  monitoring.overhead.p3:
+    severity: P3
+    load_based: false
+    pct_min: 5
+    verify_sql: [V-02]
+    fallback: &fb_mon
+      cause: Monitoring and maintenance jobs use a measurable part of the database time. They query the data dictionary or collect statistics while users are working.
+      impact: This work competes with the real workload for CPU and I/O. It also hides which statements the application itself runs.
+      recommendation: Review the frequency and schedule of the monitoring queries and maintenance jobs. Move heavy ones to quiet hours or reduce what they collect.
+  monitoring.overhead.p2:
+    severity: P2
+    load_based: false
+    pct_min: 10
+    verify_sql: [V-02]
+    fallback: *fb_mon
+  config.param.p4:
+    severity: P4
+    load_based: false
+    verify_sql: [V-15]
+    fallback:
+      cause: A parameter that influences plans or memory has been changed from its default, or an underscore parameter is set. These are often set for a specific problem and then forgotten.
+      impact: Non-default values can change execution plans or behavior in ways that are hard to notice.
+      recommendation: Confirm that each such parameter is still needed and documented. Remove the ones that have no known reason.
+  config.sga_advisory.p4:
+    severity: P4
+    load_based: false
+    factor_gt: 1
+    db_time_ratio_max: 0.9
+    verify_sql: [V-16]
+    fallback:
+      cause: The SGA advisor estimates that a larger SGA would reduce database time noticeably. The current size may be limiting the cache.
+      impact: More physical reads than necessary may be happening, but the advisor estimate is only a guide.
+      recommendation: Check whether the host has memory to spare. If it does, test a larger SGA target and compare the results.

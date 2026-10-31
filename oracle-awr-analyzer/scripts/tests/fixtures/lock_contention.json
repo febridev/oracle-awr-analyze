@@ -1,0 +1,62 @@
+{
+ "meta": {
+  "cpus": 16,
+  "cores": 16,
+  "elapsed_min": 60,
+  "db_time_min": 1056,
+  "release": "19.0.0.0.0"
+ },
+ "time_model": {
+  "db_cpu": {
+   "time_s": 0,
+   "pct_db_time": 30
+  }
+ },
+ "host_cpu": {
+  "idle_pct": 60
+ },
+ "fg_events": [
+  {
+   "event": "enq: TX - row lock contention",
+   "waits": 1000.0,
+   "timeouts_pct": 0,
+   "total_wait_s": 100.0,
+   "avg_wait_ms": 500.0,
+   "waits_per_txn": 1.0,
+   "pct_db_time": 18
+  }
+ ],
+ "top_events": [
+  {
+   "event": "enq: TX - row lock contention",
+   "pct_db_time": 18,
+   "wait_class": "Other"
+  }
+ ],
+ "efficiency": {
+  "soft_parse_pct": 99,
+  "execute_to_parse_pct": 60
+ },
+ "load_profile": {
+  "hard_parses_sql": {
+   "per_s": 1.0,
+   "per_txn": 0.0
+  }
+ },
+ "thread_activity": {
+  "log_switches_total": 2,
+  "log_switches_per_hour": 2
+ },
+ "memory": {},
+ "os_stats": {},
+ "pga": {
+  "multipass_execs": 0
+ },
+ "sql": [],
+ "parameters": {},
+ "advisories": {},
+ "addm": [],
+ "os_detail": [],
+ "missing_sections": [],
+ "invalid_values": []
+}

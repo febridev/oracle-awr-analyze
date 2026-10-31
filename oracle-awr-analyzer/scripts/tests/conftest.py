@@ -63,3 +63,17 @@ def mini_awr(cpus, elapsed_min, db_time_min, db_cpu_pct, idle_pct):
     return {"meta": {"cpus": cpus, "cores": cpus, "elapsed_min": elapsed_min, "db_time_min": db_time_min},
             "time_model": {"db_cpu": {"time_s": 0, "pct_db_time": db_cpu_pct}},
             "host_cpu": {"idle_pct": idle_pct}, "top_events": [], "addm": [], "os_detail": []}
+
+
+def fixture(name):
+    import json
+    return json.loads((pathlib.Path(__file__).resolve().parent / "fixtures" / f"{name}.json").read_text())
+
+
+def max_by_subject(cands):
+    """{(domain, subject): highest severity} — P0 is highest, so the smallest string wins."""
+    out = {}
+    for c in cands:
+        k = (c["domain"], c["subject"])
+        out[k] = min(out.get(k, c["severity"]), c["severity"])
+    return out
