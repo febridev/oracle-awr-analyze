@@ -21,8 +21,7 @@ DBMS_WORKLOAD_REPOSITORY.AWR_DIFF_REPORT_HTML(
 ```
 
 Order: 1st period (dbid, instance, begin snap, end snap), then 2nd period. No defaults. Output is one
-`VARCHAR2(500)` column per row. The docs do not name that column; `output` comes from the PRD section 12
-skeleton and must be confirmed on a real database (`DESC` the function result or run the script once).
+`VARCHAR2(500)` column per row. The docs do not name that column, so the script uses `SELECT *`.
 Oracle recommends the interactive `@?/rdbms/admin/awrddrpt.sql` over calling the function directly.
 
 | Version | Signature | URL |

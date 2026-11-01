@@ -14,6 +14,12 @@ def test_diff_sql_contents(sample_awr):
     s = diff_sql(sample_awr["meta"])
     assert "SPOOL awr_diff_PRODDB.html" in s and "1234567890" in s
     assert "&base_begin_snap" in s and "&base_end_snap" in s and "3138" in s and "3162" in s
+    lines = s.splitlines()
+    sp = next(i for i, l in enumerate(lines) if l.startswith("SPOOL "))
+    for t in ("SET VERIFY OFF", "SET ECHO OFF", "SET HEADING OFF", "SET FEEDBACK OFF",
+              "ACCEPT base_begin_snap NUMBER", "ACCEPT base_end_snap NUMBER"):
+        assert any(l.startswith(t) for l in lines[:sp]), t
+    assert "SELECT *\n" in s and "SELECT output" not in s
     q = {"id": "diff", "title": "t", "domain": "d", "min_version": "12.1", "license": "diagnostics_pack",
          "sql": strip_sqlplus(s), "params": ["base_begin_snap", "base_end_snap"]}
     assert lint_query(q) == []

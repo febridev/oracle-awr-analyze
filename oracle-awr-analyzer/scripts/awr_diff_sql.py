@@ -24,9 +24,12 @@ def _int(meta: dict, k: str) -> str:
 
 def diff_sql(meta: dict) -> str:
     d, i, b, e = (_int(meta, k) for k in ("dbid", "inst_num", "begin_snap", "end_snap"))
-    return (f"SET LONG 100000000 LONGCHUNKSIZE 100000 PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON FEEDBACK OFF\n"
+    return (f"SET VERIFY OFF\nSET ECHO OFF\nSET HEADING OFF\nSET FEEDBACK OFF\n"
+            f"SET LONG 100000000 LONGCHUNKSIZE 100000 PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON\n"
+            f"ACCEPT base_begin_snap NUMBER PROMPT 'Baseline begin snap id: '\n"
+            f"ACCEPT base_end_snap NUMBER PROMPT 'Baseline end snap id: '\n"
             f"SPOOL awr_diff_{db_label(meta)}.html\n"
-            f"SELECT output\n"
+            f"SELECT *\n"
             f"FROM   TABLE(DBMS_WORKLOAD_REPOSITORY.AWR_DIFF_REPORT_HTML(\n"
             f"         {d}, {i}, &base_begin_snap, &base_end_snap,\n"
             f"         {d}, {i}, {b}, {e}));\n"
@@ -34,7 +37,7 @@ def diff_sql(meta: dict) -> str:
 
 
 def strip_sqlplus(script: str) -> str:
-    return "".join(l + "\n" for l in script.splitlines() if not re.match(r"(SET|SPOOL)\s", l)).strip()
+    return "".join(l + "\n" for l in script.splitlines() if not re.match(r"(SET|SPOOL|ACCEPT)\s", l, re.I)).strip()
 
 
 def main(argv=None) -> int:
