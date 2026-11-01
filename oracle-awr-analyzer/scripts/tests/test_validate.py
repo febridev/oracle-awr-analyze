@@ -150,8 +150,21 @@ def test_summary_rounds_to_evidence_only(good_run):
     assert any("41.2" in e for e in summ("about 41.2% of DB time"))
 
 
-@pytest.mark.parametrize("text", ["ALTER INDEX ix_a REBUILD;", "alter system set cursor_sharing=force",
-                                  "```sql\nselect 1\n```", "run `DROP` it", "Rebuild it.\nDone;"])
+REJECT = ["ALTER INDEX ix_a REBUILD;", "alter system set cursor_sharing=force", "```sql\nselect 1\n```",
+          "Rebuild it.\nDone;", "alter system set sga_target=60G scope=spfile", "ALTER INDEX ord_call_events_ix1 REBUILD ONLINE",
+          "alter user app identified by secret", "ALTER SESSION SET optimizer_mode = ALL_ROWS", "CREATE INDEX ix1 ON t(c)",
+          "create table t_bak as select * from t", "DROP INDEX ix1", "TRUNCATE TABLE t", "GRANT SELECT ON app.t TO monitor",
+          "grant dba to scott", "REVOKE SELECT ON app.t FROM monitor", "ALTER SYSTEM KILL SESSION '12,345'",
+          "exec dbms_stats.gather_table_stats('A','B')", "BEGIN dbms_stats.gather_schema_stats('APP'); END;",
+          "`ALTER SYSTEM SET x=1`"]
+ACCEPT = ["grant time to the batch window", "Grant access to users is not needed; ask the DBA to revoke rights from batch",
+          "Begin the review at the end; done.", "Alter table statistics were stale before the batch",
+          "consider alter index rebuild during a maintenance window", "Alter the redo log size after change approval",
+          "the index is dropped and recreated nightly by the job", "begin by checking V-07; then compare with V-03",
+          "consider creating an index on APP_CALL_EVENTS", "rebuild the index during a maintenance window"]
+
+
+@pytest.mark.parametrize("text", REJECT)
 def test_change_command_rejected(good_run, text):
     edit_interp(good_run, "F01", "recommendation", text)
     assert any("F01.recommendation" in e and "executable change command" in e for e in validate(good_run)[0])
@@ -161,8 +174,7 @@ def test_change_command_rejected(good_run, text):
     assert any("executive_summary" in e and "executable change command" in e for e in validate(good_run)[0])
 
 
-@pytest.mark.parametrize("text", ["Consider creating an index on APP_CALL_EVENTS.",
-                                  "Rebuild the index during a maintenance window."])
+@pytest.mark.parametrize("text", ACCEPT)
 def test_change_prose_accepted(good_run, text):
     edit_interp(good_run, "F01", "recommendation", text)
     assert validate(good_run)[0] == []

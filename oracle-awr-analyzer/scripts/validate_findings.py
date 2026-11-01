@@ -18,10 +18,16 @@ CAUSAL = re.compile(r"\b(because|due to|caused by|likely|probably|suggests)\b", 
 NUM = re.compile(r"(?<![\w.,])(-?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)")
 # shortcut: pattern list, not a SQL parser; extend when review finds a command shape that slips through
 CMD = re.compile(
-    r"\bALTER\s+(SYSTEM|SESSION|INDEX|TABLE|DATABASE)\s+\S|\bCREATE\s+(UNIQUE\s+|BITMAP\s+)?INDEX\s+\w+\s+ON\b"
-    r"|\bDROP\s+(INDEX|TABLE|USER)\s+\w|\bTRUNCATE\s+TABLE\s+\w|\b(GRANT|REVOKE)\s+\w+.*\b(TO|FROM)\s+\w"
-    r"|\bKILL\s+SESSION|\bEXEC(UTE)?\s+\w+\.\w+|\bBEGIN\b.*\bEND\s*;|```"
-    r"|`\s*(SELECT|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|GRANT|EXEC\w*)\b|;[ \t]*$", re.I | re.M | re.S)
+    r"\bALTER\s+(TABLE|INDEX)\s+[\w.$\"]+\s+(REBUILD|MOVE|ADD|MODIFY|DROP|RENAME|SHRINK|ENABLE|DISABLE|COALESCE|PARALLEL|NOPARALLEL|LOGGING|NOLOGGING|UNUSABLE|COMPRESS)\b"
+    r"|\bALTER\s+(SYSTEM|SESSION)\s+(SET|KILL|FLUSH|SWITCH|CHECKPOINT|RESET)\b"
+    r"|\bALTER\s+USER\s+\S+\s+(IDENTIFIED|ACCOUNT|QUOTA|DEFAULT|PROFILE)\b"
+    r"|\bCREATE\s+(UNIQUE\s+|BITMAP\s+)?INDEX\s+\w+\s+ON\b"
+    r"|\bCREATE\s+(GLOBAL\s+TEMPORARY\s+)?TABLE\s+[\w.$]+\s*(\(|AS\s+SELECT\b)"
+    r"|\bDROP\s+(INDEX|TABLE|USER)\s+\w|\bTRUNCATE\s+TABLE\s+\w"
+    r"|\b(GRANT|REVOKE)\s+[^\n]*?\bON\s+[\w.$]+\s+(TO|FROM)\s+\w"
+    r"|\b(GRANT|REVOKE)\s+(DBA|CONNECT|RESOURCE|SYSDBA|SELECT\s+ANY\s+\w+|CREATE\s+\w+|\w+_ROLE)(\s*,\s*\w+)*\s+(TO|FROM)\s+\w"
+    r"|\bKILL\s+SESSION\s+'|\bEXEC(UTE)?\s+\w+\.\w+\s*\(|\bBEGIN\s+[\w.]+\s*\([^\n]*\bEND\s*;|```"
+    r"|`\s*(SELECT|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|GRANT|EXEC\w*)\s+\w|;[ \t]*$", re.I | re.M)
 LABEL = re.compile(r"(?<![\w.-])P[0-4](?![\w-]|\.\d)")
 _TOK = re.compile(r"[^.\[\]]+|\[\d+\]")
 
