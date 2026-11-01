@@ -51,3 +51,26 @@ def test_none_skipped_and_all_zero():
 def test_no_active_content():
     s = hbar([{"label": "a", "value": 1, "tag": "", "color": NEUTRAL}]) + stacked_bar([{"label": "a", "value": 1, "color": NEUTRAL}])
     assert not re.search(r"<script|href=|src=|foreignObject", s)
+
+
+def test_title_escaped_once_and_outputs_parse():
+    from xml.dom.minidom import parseString
+    t = 'a<b&"c'
+    row = [{"label": "a", "value": 1, "tag": "P1", "color": NEUTRAL}]
+    d = parseString(hbar(row, ref_line=2, ref_label="r&", title=t))
+    assert d.documentElement.getAttribute("aria-label") == t
+    parseString(stacked_bar([{"label": "<x>", "value": 1, "color": NEUTRAL}], title=t))
+    parseString(hbar([]))
+
+
+def test_long_labels_truncated_with_full_title():
+    from xml.dom.minidom import parseString
+    long = "L" * 60
+    for s in (hbar([{"label": long, "value": 1, "tag": "", "color": NEUTRAL}]),
+              stacked_bar([{"label": long, "value": 1, "color": NEUTRAL}])):
+        d = parseString(s)
+        texts = [t for t in d.getElementsByTagName("text") if t.getElementsByTagName("title")]
+        assert texts
+        shown = texts[0].firstChild.data
+        assert len(shown) <= 31 and shown.endswith("…")
+        assert long in texts[0].getElementsByTagName("title")[0].firstChild.data

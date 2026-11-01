@@ -19,10 +19,15 @@ def _fmt(v: float) -> str:
     return f"{v:g}" if abs(v) < 1e6 else f"{v:.0f}"
 
 
+def _cut(s: str, n: int) -> str:
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
 def _svg(h: int, title: str, body: str) -> str:
-    t = escape(title or "chart")
+    raw = title or "chart"
+    t = escape(raw)
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {h}" width="{W}" height="{h}" '
-            f'role="img" aria-label="{escape(t, {chr(34): "&quot;"})}" font-family="sans-serif" font-size="12">'
+            f'role="img" aria-label="{escape(raw, {chr(34): "&quot;"})}" font-family="sans-serif" font-size="12">'
             f'<title>{t}</title>{body}</svg>')
 
 
@@ -38,7 +43,7 @@ def hbar(rows, ref_line=None, ref_label="", unit="", title=""):
         y = top + i * ROW
         w = max(r["value"], 0) / axis * bar_max
         txt = f'{_fmt(r["value"])}{escape(unit)}' + (f' {escape(r["tag"])}' if r.get("tag") else "")
-        out.append(f'<text x="{LABEL_W - 6}" y="{y + 18}" text-anchor="end" fill="{INK}">{escape(str(r["label"]))}</text>'
+        out.append(f'<text x="{LABEL_W - 6}" y="{y + 18}" text-anchor="end" fill="{INK}">{escape(_cut(str(r["label"]), 30))}<title>{escape(str(r["label"]))}</title></text>'
                    f'<rect x="{x0}" y="{y + 5}" width="{w:.1f}" height="18" fill="{r["color"]}"/>'
                    f'<text x="{x0 + w + 6:.1f}" y="{y + 18}" fill="{INK}">{txt}</text>')
     h = top + len(rows) * ROW
@@ -57,11 +62,12 @@ def stacked_bar(parts, title=""):
     x, segs, legend = 0.0, [], []
     for i, p in enumerate(parts):
         w = p["value"] / total * W  # scale to parts' total so the bar always fills
-        lab = f'{escape(str(p["label"]))} {_fmt(round(p["value"], 2))}'
+        full = f'{p["label"]} {_fmt(round(p["value"], 2))}'
+        lab = escape(full)
         segs.append(f'<rect class="seg" x="{x:.2f}" y="0" width="{w:.2f}" height="24" fill="{p["color"]}"><title>{lab}</title></rect>')
         # legend text carries identity so color is never the only cue
         legend.append(f'<rect x="{(i % 3) * 213}" y="{34 + i // 3 * 18}" width="10" height="10" fill="{p["color"]}"/>'
-                      f'<text x="{(i % 3) * 213 + 14}" y="{43 + i // 3 * 18}" fill="{INK}">{lab}</text>')
+                      f'<text x="{(i % 3) * 213 + 14}" y="{43 + i // 3 * 18}" fill="{INK}">{escape(_cut(full, 28))}<title>{lab}</title></text>')
         x += w
     h = 34 + ((len(parts) + 2) // 3) * 18
     return _svg(h, title, "".join(segs) + "".join(legend))
