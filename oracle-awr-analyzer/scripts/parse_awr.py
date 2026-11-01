@@ -642,6 +642,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         awr = parse(Path(a.awr_html))
+    except OSError as e:
+        print("error: cannot read %s: %s" % (a.awr_html, e.strerror or e), file=sys.stderr)
+        return 1
     except NotAwrError as e:
         print("error: %s" % e, file=sys.stderr)
         return 2

@@ -44,10 +44,16 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("run_dir")
     run = Path(ap.parse_args(argv).run_dir)
-    if not (read_json(run / "findings.json").get("diff") or {}).get("suggested"):
+    try:
+        suggested = (read_json(run / "findings.json").get("diff") or {}).get("suggested")
+        if suggested:
+            meta = read_json(run / "awr.json")["meta"]
+    except (OSError, ValueError, KeyError, AttributeError) as ex:
+        print(f"error: cannot read run data in {run}: {ex}", file=sys.stderr)
+        return 2
+    if not suggested:
         print("diff not suggested")
         return 0
-    meta = read_json(run / "awr.json")["meta"]
     try:
         out = run / f"awr_diff_{db_label(meta)}.sql"
         out.write_text(diff_sql(meta), encoding="utf-8")

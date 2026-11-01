@@ -46,16 +46,17 @@ def _sorted(findings):
 
 def _md(blocks) -> str:
     out = []
+    lt = lambda t: t.replace("<", "&lt;")  # noqa: E731  AWR text must not inject markup into the markdown viewer
     for b in blocks:
         k = b[0]
         if k == "h":
-            out.append("#" * b[1] + " " + b[2])
+            out.append("#" * b[1] + " " + lt(b[2]))
         elif k == "p":
-            out.append(b[1])
+            out.append(lt(b[1]))
         elif k == "ul":
-            out.append("\n".join("- " + i for i in b[1]))
+            out.append("\n".join("- " + lt(i) for i in b[1]))
         elif k == "table":
-            cell = lambda c, i: ("`" + str(c).replace("`", "'") + "`" if i in b[3] else str(c)).replace("|", "\\|").replace("\n", " ")  # noqa: E731
+            cell = lambda c, i: ("`" + str(c).replace("`", "'") + "`" if i in b[3] else lt(str(c))).replace("|", "\\|").replace("\n", " ")  # noqa: E731
             out.append("| " + " | ".join(b[1]) + " |\n|" + "---|" * len(b[1]) + "\n"
                        + "\n".join("| " + " | ".join(cell(c, i) for i, c in enumerate(r)) + " |" for r in b[2]))
         elif k == "pre":
@@ -188,12 +189,30 @@ def _charts(awr, fj, cfg):
 
 # ---- main --------------------------------------------------------------------------------------
 
+NO_PROBLEM = "No performance problem in this period."
+BOTTLENECK = {
+    "cpu_bound": "CPU-bound: look for the SQL with the most CPU and excessive parsing.",
+    "wait_bound": "Wait-bound: the top wait class ({top}) sets the direction of the analysis.",
+    "mixed": "Mixed: both CPU and waits contribute significantly.",
+    "non_db_host_load": "Non-database load on the host: another process is using CPU; check at OS level.",
+    "db_not_problem": "The database is not the problem in this period. If users still complain, check the snapshot period or the application and network layers.",
+}
+
+
+def _bottleneck(L) -> str:
+    b = L.get("bottleneck")
+    return BOTTLENECK[b].format(top=_n(L.get("top_wait_class"))) if b in BOTTLENECK else \
+        "Bottleneck could not be determined (load inputs unavailable)."
+
+
 def _summary(fj, L):
     fs = _sorted(fj["findings"])
     cnt = {}
     for f in fs:
         cnt[f["severity"]] = cnt.get(f["severity"], 0) + 1
-    out = [f'Load on average: {_n((L.get("avg") or {}).get("status"))}; at peak: {_n((L.get("peak") or {}).get("status"))}.',
+    peak = f'; at peak: {_n(L["peak"].get("status"))}' if L.get("peak") else ""
+    out = [NO_PROBLEM] if L.get("idle") or not fs else []
+    out += [f'Load on average: {_n((L.get("avg") or {}).get("status"))}{peak}.',
            "Findings: " + (", ".join(f"{k}: {v}" for k, v in sorted(cnt.items())) if cnt else "none") + "."]
     if fs:
         out.append(f'Most urgent: [{fs[0]["severity"]}] {fs[0]["title"]}.')
@@ -233,9 +252,15 @@ def render(run_dir: Path, audience: str, cfg=None):
     B += [("p", "Load ratio is the average number of active sessions divided by the number of CPUs; 1.0 means all CPUs are fully used."),
           ("table", ["Basis", "Active sessions", "Load ratio", "Status", "Host CPU idle"],
            [row("Average", L["avg"])] + ([row(f'Peak ({L["peak"].get("begin")} to {L["peak"].get("end")})', L["peak"])] if L.get("peak") else []), set()),
-          ("p", f'DB CPU share: {_n(L["avg"].get("db_cpu_share_pct"), " %")} of DB time | Bottleneck: {_n(L.get("bottleneck"))} | Top wait class: {_n(L.get("top_wait_class"))} | Status basis: {_n(L.get("basis"))}'),
-          ("svg", load), ("svg", comp)]
-    B += [("p", n) for n in L.get("notes") or []]
+          ("p", f'DB CPU share: {_n(L["avg"].get("db_cpu_share_pct"), " %")} of DB time | Top wait class: {_n(L.get("top_wait_class"))} | Status basis: {_n(L.get("basis"))}'),
+          ("p", _bottleneck(L))]
+    if L.get("idle"):
+        B.append(("p", NO_PROBLEM))
+    if L.get("peak"):
+        pk = lambda x: str(L["peak"].get(x)).replace("T", " ")  # noqa: E731
+        B.append(("p", f'Recommendation: run an hourly AWR for {pk("begin")} – {pk("end")} (peak) to analyse its cause separately.'))
+    B += [("svg", load), ("svg", comp)]
+    B += [("p", n) for n in fj.get("notes") or []]  # includes load notes; shown here so they are not buried in the appendix
     B.append(("h", 2, "Findings", None))
     if not fs:
         B.append(("p", "No findings were raised for this period."))
@@ -250,12 +275,11 @@ def render(run_dir: Path, audience: str, cfg=None):
                          s.get("module") or "", _short(s.get("text"), mask)])
     B += [("svg", sqlc),
           ("p", f'Monitoring and maintenance SQL together: {_n(fj["sql_summary"].get("monitoring_overhead_pct"), " %")} of elapsed time.'),
-          ("table", ["Category", "SQL ID", "Confidence", "% elapsed", "Module", "SQL text (truncated)"], rows, {5})]
+          ("table", ["Category", "SQL ID", "Confidence", "% elapsed", "Module", "SQL text (truncated)"], rows, {4, 5})]
     B += [("h", 2, "Domain detail", None), ("svg", events), ("svg", io),
           ("p", "RAC comparison not available: v1 analyzes a single instance only.")]
     for dom in sorted({f["domain"] for f in fs}):
         B.append(("p", f"{dom}: " + "; ".join(f'{f["id"]} [{f["severity"]}] {f["title"]}' for f in fs if f["domain"] == dom)))
-    B += [("p", n) for n in fj.get("notes") or []]
     B.append(("h", 2, "Verification SQL", None) if show_dba else None)
     if show_dba:
         B.append(("p", "Run these read-only queries yourself; the tool never connects to a database. " + LICENSE))
@@ -267,7 +291,7 @@ def render(run_dir: Path, audience: str, cfg=None):
     B.append(("h", 2, "AWR diff", None))
     d = fj.get("diff") or {}
     if d.get("suggested"):
-        pct = (cfg.get("diff") or {}).get("duration_diff_pct", 20)
+        pct = (cfg["thresholds"].get("diff") or {}).get("duration_diff_pct", 20)
         from awr_diff_sql import db_label
         B += [("p", "A comparison with a baseline report is suggested for these reasons:"), ("ul", d.get("reasons") or ["not given"]),
               ("p", f'Current period: snapshots {m["begin_snap"]}-{m["end_snap"]} (instance {m["inst_num"]}).'),

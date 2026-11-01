@@ -35,21 +35,23 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
 5. Validate, then lint (both must exit 0):
    `python3 <skill>/scripts/validate_findings.py RUN`
    `python3 <skill>/scripts/lint_verify_sql.py --run RUN`
-   `validate_findings` prints `ERROR <finding>.<field>: ...` lines; fix exactly those and rerun. At most 3 attempts.
+   `validate_findings` prints `ERROR <finding>.<field>: ...` lines; fix exactly those and rerun. At most 3 attempts; after 3 failed attempts, render anyway - findings whose
+   interpretation is rejected use the standard text.
    `WARN` lines are not failures. If `lint_verify_sql` reports a problem in the catalog itself (not in `RUN`),
    that is a skill bug: stop and report it, do not edit the SQL files to get past it.
 6. Render: `python3 <skill>/scripts/render_report.py RUN [--config FILE]` -> `RUN/report.md`, `RUN/report.html`
    (one file, no scripts, no external resources).
 7. AWR diff: `python3 <skill>/scripts/awr_diff_sql.py RUN`. It writes `awr_diff_<db>.sql` when `findings.json`
-   has `diff.suggested`; otherwise it says why not. Version signatures live in `<skill>/references/awr_diff.md`.
+   has `diff.suggested`; otherwise it prints "diff not suggested" (the reasons are in `findings.json` `diff`). Version signatures live in `<skill>/references/awr_diff.md`.
 8. Reply to the user with the executive summary (max 5 lines), the highest-severity findings by id and title,
    and the paths to `report.html`, `report.md`, `findings.json` and the diff script if written.
-   Mention warnings from `findings.json` (`notes`, load status, comparison warnings) briefly.
+   Mention warnings from `findings.json` (`notes`, load status, comparison warnings) briefly. Relay the report's
+   bottleneck sentence and, when a peak exists, its "run an hourly AWR for <peak window>" recommendation.
 
 ## Reading findings.json
 
 Each finding has: `id` (F01...), `domain`, `subject`, `title`, `severity` (P0 worst, P4 informational),
-`confidence`, `triggered_by` (rule ids), `evidence` (list of `{path, value, ...}`), `verify_sql` (V-xx ids),
+`confidence`, `triggered_by` (rule ids), `evidence` (list of `{path, value, ...}`), `verify_sql` (objects with `id`, `title`, `sql`, `license`, `available`, `params`; use `available` before citing one),
 `fallback` (canned cause/impact/recommendation text used if you write nothing), and
 `severity_adjustments` (why the script lowered or capped the severity, for example a volume cap when the
 event share is high but latency is fine). Also read the top-level `load`, `notes`, `sql_summary` and `diff`.
@@ -106,13 +108,14 @@ You must self-check (not machine-enforced):
   change; `false` only for read-only checks.
 - Keep the story consistent with `severity_adjustments` and `confidence`. If the storage profile was assumed
   (`notes`), say latency judgments rest on that assumption.
-- If a section is missing (`meta.missing_sections`), say it is absent; do not guess its content.
+- If a section is missing (top-level `missing_sections` in `awr.json`, also summarized in `notes`), say it is absent; do not guess its content.
 
 ## Config (optional `--config my.yaml`)
 
 | Key | Meaning |
 |---|---|
 | `user_schemas` | Schemas owned by the application (SQL classification) |
+| (all lists below) | DBA lists are literal names, case-insensitive, not regexes; paste modules as shown in AWR, e.g. `dbspicao11@host (TNS V1-V3)`; empty entries are ignored |
 | `monitoring_schemas`, `monitoring_modules` | Monitoring/maintenance schemas and module names |
 | `app_hosts`, `app_programs`, `app_table_prefixes` | Hints that mark application SQL |
 | `storage_profile` | `hdd`, `san` or `flash` (default `san`, stated as an assumption in `notes`) |
