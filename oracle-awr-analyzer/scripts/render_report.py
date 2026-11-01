@@ -19,12 +19,13 @@ LICENSE = "AWR and DBA_HIST views require the Oracle Diagnostics Pack license."
 LABELS = ("Domain", "Evidence", "Facts", "Hypothesis", "User impact", "How to verify", "Recommendation",
           "Triggered by", "Severity adjusted", "Source")
 SQL_CELL = 200
-_STR, _NUM = re.compile(r"'(?:[^']|'')*'"), re.compile(r"(?<![\w:.$#])\d+(?:\.\d+)?(?!\w)")
+_Q = re.compile(r"[nN]?[qQ]'(?:\[.*?\]|\{.*?\}|\(.*?\)|<.*?>|(?P<d>[^\s\[\]{}()<>']).*?(?P=d))'", re.S)
+_STR = re.compile(r"'(?:[^']|'')*'")
+_NUM = re.compile(r"(?<![\w:.$#])(?:0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?!\w)")
 
 
 def mask_sql(text: str) -> str:
-    # shortcut: regex masking may miss unusual quoting (q'[...]'); upgrade if review finds leaks
-    return _NUM.sub("?", _STR.sub("'?'", text))
+    return _NUM.sub("?", _STR.sub("'?'", _Q.sub("'?'", text)))
 
 
 def _n(v, unit="") -> str:
@@ -32,7 +33,7 @@ def _n(v, unit="") -> str:
 
 
 def _short(text, mask) -> str:
-    t = " ".join((mask_sql(text) if mask else text or "").split())
+    t = " ".join((mask_sql(text or "") if mask else text or "").split())
     return t if len(t) <= SQL_CELL else t[:SQL_CELL] + "…"
 
 
@@ -171,16 +172,17 @@ def _charts(awr, fj, cfg):
                       "color": svg.CATEGORY_COLORS.get(s.get("category"), svg.NEUTRAL)} for s in top],
                     unit="%", title="Top 10 SQL by elapsed time (% of total, colored by category)")
     prof, rules = fj.get("storage_profile") or "san", cfg["thresholds"].get("rules") or {}
-    lat, warn = [], {}
+    lat = []
     for ev, pre in (cfg["thresholds"].get("latency_events") or {}).items():
         ms = (rules.get(pre + ".warn") or {}).get("ms")
         ms = ms.get(prof) if isinstance(ms, dict) else ms
         row = next((e for e in awr.get("fg_events") or [] if e["event"] == ev and e.get("avg_wait_ms") is not None), None)
         if row:
-            lat.append({"label": ev, "value": row["avg_wait_ms"], "tag": f"(warn {ms} ms)" if ms is not None else "", "color": svg.NEUTRAL})
-            warn.setdefault("v", ms)
-    io = svg.hbar(lat, ref_line=warn.get("v"), ref_label=f"{lat[0]['label']} warn" if lat and warn.get("v") is not None else "",
-                  unit=" ms", title=f"Average wait per event (ms); each bar tag shows its own warn threshold, storage profile {prof}")
+            if ms:
+                lat.append({"label": ev, "value": round(row["avg_wait_ms"] / ms * 100, 2), "color": svg.NEUTRAL,
+                            "tag": f'{row["avg_wait_ms"]:g} ms / warn {ms:g} ms'})
+    io = svg.hbar(lat, ref_line=100, ref_label="warning threshold", unit="%",
+                  title=f"Wait latency as % of its warning threshold (storage profile {prof}); 100% = threshold")
     return comp, events, load, sqlc, io
 
 
@@ -203,7 +205,7 @@ def render(run_dir: Path, audience: str, cfg=None):
     cfg = cfg or load_config(None)
     awr, fj = read_json(run / "awr.json"), read_json(run / "findings.json")
     m, L = awr["meta"], fj["load"]
-    show_dba, mask = audience != "user", audience == "user"
+    show_dba, mask = audience != "user", audience != "dba"
     errs, _ = validate(run)
     summ, ients, bad, whole = _interp(run, errs)
     fs = _sorted(fj["findings"])
@@ -214,19 +216,24 @@ def render(run_dir: Path, audience: str, cfg=None):
         banners.append("RAC sections not analyzed in v1. Only this instance's report content was read.")
     if m["restart"]:
         banners.append("The instance restarted during this period; counters are incomplete and confidence is lowered.")
-    B = [("h", 2, "Executive summary", None), ("ul", summ or _summary(fj, L)),
-         ("h", 2, "Database and period", None),
+    short = cfg["thresholds"].get("load", {}).get("short_period_min")
+    if m.get("elapsed_min") is not None and short and m["elapsed_min"] < short:
+        banners.append(f'Short period ({m["elapsed_min"]:g} min, under {short} min): averages may not represent normal load.')
+    if "reduced accuracy" in str(m.get("parser")):
+        banners.append("The report was read with the fallback parser (reduced accuracy); check key values by hand.")
+    B = [("h", 2, "Executive summary", None), ("ul", summ or _summary(fj, L))] if audience != "dba" else []
+    B += [("h", 2, "Database and period", None),
          ("p", f'DB: {m["db_name"]} (DBID {m["dbid"]}) | {inst} | {m["release"]} | CDB: {"YES" if m["cdb"] else "NO"}'),
-         ("p", f'Host: {m["host"]} | {m["platform"]} | CPUs: {_n(m["cpus"])} (cores {_n(m["cores"])}) | Memory: {_n(m["memory_gb"], " GB")}'),
-         ("p", f'Period: {m["begin_time"]} to {m["end_time"]} | Snapshots {m["begin_snap"]}-{m["end_snap"]} | '
-               f'Elapsed {_n(m["elapsed_min"], " min")} | DB time {_n(m["db_time_min"], " min")}'),
+         ("p", f'Host: {m["host"]} | {_n(m["cpus"])} CPU, {_n(m["cores"])} core, {_n(m["memory_gb"], " GB")} | {m["platform"]}'),
+         ("p", f'Period: snap {m["begin_snap"]}-{m["end_snap"]} | {str(m["begin_time"]).replace("T", " ")} - {str(m["end_time"]).replace("T", " ")} | '
+               f'Elapsed {_n(m["elapsed_min"], " min")} | DB Time {_n(m["db_time_min"], " min")}'),
          ("h", 2, "Load health", None)]
     comp, events, load, sqlc, io = _charts(awr, fj, cfg)
     row = lambda n, x: [n, _n(x.get("aas")), _n(x.get("load_ratio")), _n(x.get("status")), _n(x.get("host_idle_pct", x.get("os_idle_pct")), " %")]  # noqa: E731
     B += [("p", "Load ratio is the average number of active sessions divided by the number of CPUs; 1.0 means all CPUs are fully used."),
           ("table", ["Basis", "Active sessions", "Load ratio", "Status", "Host CPU idle"],
            [row("Average", L["avg"])] + ([row(f'Peak ({L["peak"].get("begin")} to {L["peak"].get("end")})', L["peak"])] if L.get("peak") else []), set()),
-          ("p", f'Bottleneck: {_n(L.get("bottleneck"))} | Top wait class: {_n(L.get("top_wait_class"))} | Status basis: {_n(L.get("basis"))}'),
+          ("p", f'DB CPU share: {_n(L["avg"].get("db_cpu_share_pct"), " %")} of DB time | Bottleneck: {_n(L.get("bottleneck"))} | Top wait class: {_n(L.get("top_wait_class"))} | Status basis: {_n(L.get("basis"))}'),
           ("svg", load), ("svg", comp)]
     B += [("p", n) for n in L.get("notes") or []]
     B.append(("h", 2, "Findings", None))
@@ -254,7 +261,7 @@ def render(run_dir: Path, audience: str, cfg=None):
         B.append(("p", "Run these read-only queries yourself; the tool never connects to a database. " + LICENSE))
         for f in fs:
             for v in f["verify_sql"]:
-                B.append(("h", 4, f'{f["id"]} {v["id"]}: {v.get("title") or ""}', None))
+                B.append(("h", 4, f'{f["id"]} {v["id"]}: {v.get("title") or ""} (license: {v.get("license") or "unknown"})', None))
                 B.append(("pre", v["sql"]) if v.get("available") and v.get("sql") else
                          ("p", f'{v["id"]}: not available ({v.get("reason") or "no reason given"})'))
     B.append(("h", 2, "AWR diff", None))
@@ -262,10 +269,25 @@ def render(run_dir: Path, audience: str, cfg=None):
     B += [("p", "A comparison with a baseline report is suggested for these reasons:"), ("ul", d.get("reasons") or ["not given"])] \
         if d.get("suggested") else [("p", "No AWR diff is suggested for this period.")]
     B.append(("h", 2, "Appendix", None))
-    app = [f'Parser: {m.get("parser")}'] + list(m.get("notes") or [])
-    app += [f'Invalid value ignored: {i["path"]} = {i["raw"]} ({i["reason"]})' for i in awr.get("invalid_values") or []]
-    app += [f"Section missing from the AWR report: {s}" for s in awr.get("missing_sections") or []]
-    B.append(("ul", app))
+    lp = awr.get("load_profile") or {}
+    km = [(k, n) for k, n in (("db_time_s", "DB Time"), ("db_cpu_s", "DB CPU"), ("executes_sql", "Executes (SQL)"),
+                              ("transactions", "Transactions"), ("redo_size_bytes", "Redo size (bytes)"),
+                              ("hard_parses_sql", "Hard parses (SQL)"))]
+    km = [f'{n} per second: {_n((lp.get(k) or {}).get("per_s"))}' for k, n in km]
+    A = L.get("avg") or {}
+    km += [f'Average active sessions: {_n(A.get("aas"))}', f'Load ratio: {_n(A.get("load_ratio"))}']
+    B += [("h", 3, "Key metrics", None), ("ul", km), ("h", 3, "Assumptions", None),
+          ("ul", [f'storage profile: {fj.get("storage_profile")}' + (" (assumed; set storage_profile in the config to change it)" if
+                  any("assumed" in x for x in fj.get("notes") or []) else " (set in the config)"),
+                  f'Logical CPUs: {_n(m.get("cpus"))} (cores {_n(m.get("cores"))})',
+                  "Hyperthreading: " + ("detected, CPU count is logical" if L.get("hyperthreading") else "not detected")]),
+          ("h", 3, "Data quality", None),
+          ("ul", [f'Parser: {m.get("parser")}'] + list(m.get("notes") or [])
+           + [f'Invalid value ignored: {i["path"]} = {i["raw"]} ({i["reason"]})' for i in awr.get("invalid_values") or []]
+           + [f"Section missing from the AWR report: {x}" for x in awr.get("missing_sections") or []]),
+          ("h", 3, "Limitations", None),
+          ("ul", ["v1 supports a single instance only; RAC, PDB and Exadata are not analyzed",
+                  "HTML input only (text AWR reports are not read)", "English only"])]
     if show_dba:
         for s in sorted(by.values(), key=lambda s: -((s.get("by_elapsed") or {}).get("pct_total") or 0))[:10]:
             B += [("h", 4, f'SQL {s["sql_id"]} ({s.get("category")}; {"; ".join(s.get("reasons") or [])})', None), ("pre", s.get("text") or "")]

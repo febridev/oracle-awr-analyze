@@ -45,7 +45,7 @@ def test_no_external_refs(rendered):
 
 def test_sql_text_escaped(good_run):
     _edit(good_run, "awr.json", lambda d: d["sql"][0].__setitem__("text", "select '<script>alert(1)</script>' from dual"))
-    md, html = render(good_run, "both")
+    md, html = render(good_run, "dba")  # dba is unmasked, so the text reaches the table and appendix
     assert "<script>" not in html and "&lt;script&gt;" in html
     assert "`select '<script>" in md  # markdown keeps it inside a code span
 
@@ -114,3 +114,80 @@ def test_cli_writes_files(good_run):
     r = subprocess.run([sys.executable, "oracle-awr-analyzer/scripts/render_report.py", str(good_run)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert (good_run / "report.md").exists() and (good_run / "report.html").exists()
+
+
+# ---- fix round 1 ----
+def _top(md):
+    return md[:md.index("## Appendix")]
+
+
+def test_header_lines_prd(rendered):
+    md = rendered[0]
+    assert "Host: db-host-01 | 34 CPU, 34 core, 125.63 GB | Linux x86 64-bit\n" in md
+    assert ("Period: snap 3138-3162 | 2026-10-28 00:00:34 - 2026-10-29 00:00:13 | "
+            "Elapsed 1439.65 min | DB Time 10255.65 min\n") in md
+
+
+def test_short_period_and_parser_banners(good_run):
+    _edit(good_run, "awr.json", lambda d: (d["meta"].update(elapsed_min=5, parser="html.parser (reduced accuracy)")))
+    md, html = render(good_run, "both")
+    top = md[:md.index("## Executive summary")]
+    assert "short" in top.lower() and "reduced accuracy" in top
+    assert html.count('class="banner"') == 2
+
+
+def test_license_tag_per_query(good_run):
+    _edit(good_run, "findings.json", lambda d: d["findings"][0]["verify_sql"][0].update(available=False, sql=None, reason="x"))
+    md, _ = render(good_run, "both")
+    assert "(license: diagnostics_pack)" in md[md.index("## Verification SQL"):md.index("## AWR diff")]
+    assert "Diagnostics Pack license" in md
+
+
+@pytest.mark.parametrize("sql,gone", [("select q'[it's secret]' from t", "secret"), ("x = q'{O'Brien}'", "Brien"),
+                                      ("x = nq'#abc#'", "abc"), ("a = .5 and b = 1e5 and c = 0x1F", "5")])
+def test_mask_sql_probes(sql, gone):
+    out = mask_sql(sql)
+    assert gone not in out and "?" in out
+
+
+def test_mask_sql_exact():
+    assert mask_sql("select q'[it's secret]' from t") == "select '?' from t"
+    assert mask_sql("a = .5 and b = 1e5 and c = 0x1F and d = t1") == "a = ? and b = ? and c = ? and d = t1"
+
+
+def test_none_sql_text(good_run):
+    _edit(good_run, "awr.json", lambda d: d["sql"][0].__setitem__("text", None))
+    for aud in ("user", "both", "dba"):
+        render(good_run, aud)
+
+
+def test_masking_by_audience(good_run):
+    probe = "ORD_VERSION = 2"
+    u, uh = render(good_run, "user")
+    b, bh = render(good_run, "both")
+    d, _ = render(good_run, "dba")
+    assert probe not in u and probe not in uh and probe not in _top(b) and probe not in bh[:bh.index("<h2>Appendix")]
+    assert probe in b[b.index("## Appendix"):] and probe in d and "ORD_VERSION = ?" in _top(b)
+    assert d != b
+    assert "## Executive summary" not in d
+
+
+def test_latency_chart_pct_of_warn(rendered):
+    h = rendered[1]
+    i = h.index("direct path read<title>")
+    seg = h[i:i + 400]
+    assert "70.95" in h and "14.19 ms / warn 20 ms" in h and "warning threshold" in h and seg
+
+
+def test_db_cpu_share_in_load_health(rendered):
+    sec = rendered[0][rendered[0].index("## Load health"):rendered[0].index("## Findings")]
+    assert "DB CPU share: 32.82 %" in sec
+
+
+def test_appendix_contents(rendered):
+    app = rendered[0][rendered[0].index("## Appendix"):]
+    for t in ("Key metrics", "DB Time per second: 7.1", "Executes (SQL) per second", "Transactions per second",
+              "Redo size (bytes) per second: 22388907.1", "Hard parses (SQL) per second", "Assumptions", "storage profile: san (assumed",
+              "Logical CPUs: 34", "Hyperthreading", "Limitations", "single instance only", "RAC, PDB and Exadata are not analyzed",
+              "HTML input only", "English only", "efficiency.library_hit_pct"):
+        assert t in app, t
