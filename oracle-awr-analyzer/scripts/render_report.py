@@ -266,8 +266,18 @@ def render(run_dir: Path, audience: str, cfg=None):
                          ("p", f'{v["id"]}: not available ({v.get("reason") or "no reason given"})'))
     B.append(("h", 2, "AWR diff", None))
     d = fj.get("diff") or {}
-    B += [("p", "A comparison with a baseline report is suggested for these reasons:"), ("ul", d.get("reasons") or ["not given"])] \
-        if d.get("suggested") else [("p", "No AWR diff is suggested for this period.")]
+    if d.get("suggested"):
+        pct = (cfg.get("diff") or {}).get("duration_diff_pct", 20)
+        from awr_diff_sql import db_label
+        B += [("p", "A comparison with a baseline report is suggested for these reasons:"), ("ul", d.get("reasons") or ["not given"]),
+              ("p", f'Current period: snapshots {m["begin_snap"]}-{m["end_snap"]} (instance {m["inst_num"]}).'),
+              ("p", "A good baseline is the same weekday and hour in a previous week, with a similar duration and no instance restart in between. "
+                    "Please give the baseline snapshot IDs (begin and end)."),
+              ("p", f"The comparison gets low confidence if the two periods differ in duration by more than {pct}%, "
+                    "if the instance restarted between them, or if the CPU count differs."),
+              ("p", f'Run awr_diff_{db_label(m)}.sql in SQL*Plus; it asks for base_begin_snap and base_end_snap.')]
+    else:
+        B.append(("p", "No AWR diff is suggested for this period."))
     B.append(("h", 2, "Appendix", None))
     lp = awr.get("load_profile") or {}
     km = [(k, n) for k, n in (("db_time_s", "DB Time"), ("db_cpu_s", "DB CPU"), ("executes_sql", "Executes (SQL)"),
