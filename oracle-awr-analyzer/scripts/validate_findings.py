@@ -19,6 +19,7 @@ NUM = re.compile(r"(?<![\w.,])(-?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])|\d+(?:\
 # shortcut: pattern list, not a SQL parser; extend when review finds a command shape that slips through
 CMD = re.compile(
     r"\bALTER\s+(TABLE|INDEX)\s+[\w.$\"]+\s+(REBUILD|MOVE|ADD|MODIFY|DROP|RENAME|SHRINK|ENABLE|DISABLE|COALESCE|PARALLEL|NOPARALLEL|LOGGING|NOLOGGING|UNUSABLE|COMPRESS)\b"
+    r"|\bALTER\s+DATABASE\s+(DATAFILE|TEMPFILE|ADD|DROP|RENAME|CLEAR|SET|DEFAULT|ARCHIVELOG|NOARCHIVELOG|FLASHBACK|FORCE|OPEN|MOUNT|RECOVER|BACKUP)\b"
     r"|\bALTER\s+(SYSTEM|SESSION)\s+(SET|KILL|FLUSH|SWITCH|CHECKPOINT|RESET)\b"
     r"|\bALTER\s+USER\s+\S+\s+(IDENTIFIED|ACCOUNT|QUOTA|DEFAULT|PROFILE)\b"
     r"|\bCREATE\s+(UNIQUE\s+|BITMAP\s+)?INDEX\s+\w+\s+ON\b"
@@ -168,7 +169,12 @@ def validate(run_dir: Path):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Validate findings.json and interpretation.json")
     ap.add_argument("run_dir")
-    errs, warns = validate(Path(ap.parse_args(argv).run_dir))
+    run = Path(ap.parse_args(argv).run_dir)
+    try:
+        errs, warns = validate(run)
+    except (OSError, ValueError, KeyError, AttributeError) as ex:
+        print(f"error: cannot read findings.json/awr.json in {run}: {ex}", file=sys.stderr)
+        return 2
     for e in errs:
         print(f"ERROR {e}")
     for w in warns:

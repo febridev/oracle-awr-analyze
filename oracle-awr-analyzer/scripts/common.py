@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 from pathlib import Path
 from typing import Optional
 
@@ -52,12 +51,7 @@ def _read_config(path) -> dict:
 def _as_list(user, key, path) -> list:
     v = user.get(key)
     v = [] if v is None else v if isinstance(v, list) else [v]  # a scalar is a one-item list
-    for pat in v:
-        try:
-            re.compile(str(pat))
-        except re.error as e:
-            raise ConfigError(f"config file {path}: invalid regex {pat!r} in '{key}': {e}")
-    return [str(x) for x in v]
+    return [str(x).strip() for x in v if str(x).strip()]  # empty entries would match everything
 
 
 def load_config(path: Optional[Path]) -> dict:

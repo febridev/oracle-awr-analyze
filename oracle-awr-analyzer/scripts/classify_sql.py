@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-from common import load_config, read_json, write_json
+from common import ConfigError, load_config, read_json, write_json
 
 _RANK = ("explicit", "strong", "weak")
 # shortcut: misses dynamic SQL, quoted identifiers and comma-joined tables; upgrade if A5 accuracy < 90%
@@ -27,7 +27,8 @@ def _objects(text):
 
 
 def classify(sql: dict, db_host: str, cls: dict) -> dict:
-    dba = cls.get("dba", {})
+    # DBA lists are literal names; schemas are compared as names, the rest are matched as escaped patterns
+    dba = {k: v if k.endswith("_schemas") else [re.escape(x) for x in v] for k, v in cls.get("dba", {}).items()}
     module, text = sql.get("module") or "", sql.get("text") or ""
     program, chost = sql.get("program"), sql.get("client_host")
     tp = cls["text_patterns"]
@@ -120,9 +121,16 @@ def main(argv=None) -> int:
     ap.add_argument("run_dir")
     ap.add_argument("--config")
     a = ap.parse_args(argv)
-    cls = load_config(Path(a.config) if a.config else None)["classification"]
-    f = Path(a.run_dir) / "awr.json"
-    awr = read_json(f)
+    try:
+        cls = load_config(Path(a.config) if a.config else None)["classification"]
+        f = Path(a.run_dir) / "awr.json"
+        awr = read_json(f)
+    except ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as e:
+        print(f"error: cannot read {Path(a.run_dir) / 'awr.json'}: {e}", file=sys.stderr)
+        return 2
     host = (awr.get("meta") or {}).get("host") or ""
     for s in awr.get("sql", []):
         s.update(classify(s, host, cls))

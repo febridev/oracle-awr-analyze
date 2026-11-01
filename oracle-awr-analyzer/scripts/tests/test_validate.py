@@ -156,12 +156,14 @@ REJECT = ["ALTER INDEX ix_a REBUILD;", "alter system set cursor_sharing=force", 
           "create table t_bak as select * from t", "DROP INDEX ix1", "TRUNCATE TABLE t", "GRANT SELECT ON app.t TO monitor",
           "grant dba to scott", "REVOKE SELECT ON app.t FROM monitor", "ALTER SYSTEM KILL SESSION '12,345'",
           "exec dbms_stats.gather_table_stats('A','B')", "BEGIN dbms_stats.gather_schema_stats('APP'); END;",
-          "`ALTER SYSTEM SET x=1`"]
+          "`ALTER SYSTEM SET x=1`", "ALTER DATABASE DATAFILE 3 RESIZE 10G", "alter database add logfile group 4 size 2g",
+          "resize redo logs: alter database add logfile size 2G"]
 ACCEPT = ["grant time to the batch window", "Grant access to users is not needed; ask the DBA to revoke rights from batch",
           "Begin the review at the end; done.", "Alter table statistics were stale before the batch",
           "consider alter index rebuild during a maintenance window", "Alter the redo log size after change approval",
           "the index is dropped and recreated nightly by the job", "begin by checking V-07; then compare with V-03",
-          "consider creating an index on APP_CALL_EVENTS", "rebuild the index during a maintenance window"]
+          "consider creating an index on APP_CALL_EVENTS", "rebuild the index during a maintenance window",
+          "add more redo log groups after change approval"]
 
 
 @pytest.mark.parametrize("text", REJECT)

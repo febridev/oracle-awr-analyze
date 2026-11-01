@@ -28,7 +28,7 @@ def test_calibration(module, text, cat, conf):
 
 
 def test_dba_list_wins():
-    cls = dict(CLS, dba={"monitoring_modules": ["^Poller$"]})
+    cls = dict(CLS, dba={"monitoring_modules": ["Poller"]})
     assert classify({"module": "Poller", "text": "SELECT ID FROM LCK_SEMAPHORE"}, DB, cls)["category"] == "monitoring"
 
 
