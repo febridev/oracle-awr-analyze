@@ -6,16 +6,16 @@ import pytest
 from conftest import build_padded, run_parse
 
 
-def test_cli_writes_run_dir(tmp_path, sample_path):
+def test_cli_writes_run_dir(tmp_path, sample_path, sample_meta):
     run = run_parse(sample_path, tmp_path)
-    assert run[0] == 0 and run[1].name == "awr-report-PRODDB-1-3138_3162"
+    assert run[0] == 0 and run[1].name == sample_meta["run_dir_name"]
     assert (run[1] / "awr.json").exists()
 
 
-def test_second_run_gets_suffixed_folder(tmp_path, sample_path):
+def test_second_run_gets_suffixed_folder(tmp_path, sample_path, sample_meta):
     run_parse(sample_path, tmp_path)
     code, second = run_parse(sample_path, tmp_path)
-    assert second.name.endswith("3162-2") and (tmp_path / "awr-report-PRODDB-1-3138_3162/awr.json").exists()
+    assert second.name.endswith("3162-2") and (tmp_path / sample_meta["run_dir_name"] / "awr.json").exists()
 
 
 def test_exit_codes(tmp_path):
@@ -27,13 +27,13 @@ def test_exit_codes(tmp_path):
     assert run_parse(txt, tmp_path)[0] == 3
 
 
-def test_truncated_file(tmp_path, sample_path):
+def test_truncated_file(tmp_path, sample_path, sample_meta):
     data = sample_path.read_bytes()
     p = tmp_path / "t.html"
     p.write_bytes(data[: len(data) // 2])
     code, run = run_parse(p, tmp_path)
     awr = json.loads((run / "awr.json").read_text())
-    assert code == 0 and awr["meta"]["db_name"] == "PRODDB"
+    assert code == 0 and awr["meta"]["db_name"] == sample_meta["db_name"]
     assert {"parameters", "pga_hist", "activity"} <= {m["section"] for m in awr["missing_sections"]}
 
 

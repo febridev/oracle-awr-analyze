@@ -1,3 +1,4 @@
+import os
 import pathlib
 import shutil
 import subprocess
@@ -6,9 +7,33 @@ import sys
 import pytest
 
 
+# The real AWR sample is restricted: it lives outside git, in <repo>/local-samples/ (git-ignored)
+# or in $AWR_SAMPLE_DIR. Tests that need it are skipped when it is absent.
+SAMPLE_DIR = pathlib.Path(os.environ.get("AWR_SAMPLE_DIR",
+                                         pathlib.Path(__file__).resolve().parents[3] / "local-samples"))
+SAMPLE_HTML = SAMPLE_DIR / "awrrpt_1_3138_3162.html"
+
+
+def _require_sample() -> pathlib.Path:
+    if not SAMPLE_HTML.exists():
+        pytest.skip(f"real AWR sample not available ({SAMPLE_HTML}); set AWR_SAMPLE_DIR")
+    return SAMPLE_HTML
+
+
 @pytest.fixture
 def sample_path() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parents[2] / "examples" / "awrrpt_1_3138_3162.html"
+    return _require_sample()
+
+
+@pytest.fixture(scope="session")
+def sample_meta() -> dict:
+    """Real identifiers of the local sample (db name, host, SQL ids...), kept out of the repo."""
+    import json
+    _require_sample()
+    meta = SAMPLE_DIR / "sample.json"
+    if not meta.exists():
+        pytest.skip(f"{meta} not available")
+    return json.loads(meta.read_text())
 
 
 def make_ctx(tmp_path, html):
@@ -21,15 +46,13 @@ def make_ctx(tmp_path, html):
 
 @pytest.fixture(scope="session")
 def sample_ctx(tmp_path_factory):
-    import pathlib
-    src = pathlib.Path(__file__).resolve().parents[2] / "examples" / "awrrpt_1_3138_3162.html"
-    return make_ctx(tmp_path_factory.mktemp("s"), src.read_text())
+    return make_ctx(tmp_path_factory.mktemp("s"), _require_sample().read_text())
 
 
 @pytest.fixture(scope="session")
 def sample_awr():
     from parse_awr import parse
-    return parse(pathlib.Path(__file__).resolve().parents[2] / "examples" / "awrrpt_1_3138_3162.html")
+    return parse(_require_sample())
 
 
 def run_parse(path, out_parent):
@@ -84,8 +107,7 @@ def max_by_subject(cands):
 
 @pytest.fixture(scope="session")
 def sample_run(tmp_path_factory):
-    src = pathlib.Path(__file__).resolve().parents[2] / "examples" / "awrrpt_1_3138_3162.html"
-    rc, run = run_parse(src, tmp_path_factory.mktemp("g"))
+    rc, run = run_parse(_require_sample(), tmp_path_factory.mktemp("g"))
     assert rc == 0
     for s in ("classify_sql.py", "analyze.py"):
         r = subprocess.run([sys.executable, "oracle-awr-analyzer/scripts/" + s, str(run)], capture_output=True, text=True)

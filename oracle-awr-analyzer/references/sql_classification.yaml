@@ -1,4 +1,5 @@
-# Defaults come from PRD section 8 calibration; edit here or override via --config.
+# Built-in, environment-neutral patterns. Put your own application hints (programs, hosts,
+# table prefixes, schemas) in a --config file, not here.
 # All entries are case-insensitive regex strings.
 monitoring_modules: ['^OEM', 'emagent', 'zabbix', 'prometheus', 'nagios', '^dbspicao']
 monitoring_programs: ['dbspicao11']
@@ -7,9 +8,9 @@ internal_modules: ['^MMON_SLAVE', '^MMNL', '^MMON']
 adhoc_modules: ['SQL Developer', '^TOAD', 'PL/SQL Developer']
 generic_modules: ['JDBC Thin Client', '^SQL\*Plus', '^python']
 oracle_process_programs: ['^oracle$', '^ora_']
-app_programs: ['APPSRV', 'APPWORKER', 'APPBATCH']
+app_programs: []
 app_hosts: []
-app_table_prefixes: ['APP_', 'ORD_', 'LCK_']
+app_table_prefixes: []
 user_schemas: []
 monitoring_schemas: []
 text_patterns:

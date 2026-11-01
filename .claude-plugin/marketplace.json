@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "oracle-awr-analyze",
+  "description": "Oracle AWR report analysis skill",
+  "owner": {
+    "name": "febridev",
+    "url": "https://github.com/febridev"
+  },
+  "plugins": [
+    {
+      "name": "oracle-awr-analyzer",
+      "source": "./oracle-awr-analyzer",
+      "description": "Analyze an Oracle AWR report into P0-P4 findings with evidence, read-only verification SQL and an offline HTML report.",
+      "homepage": "https://github.com/febridev/oracle-awr-analyze",
+      "repository": "https://github.com/febridev/oracle-awr-analyze",
+      "category": "productivity",
+      "keywords": ["oracle", "awr", "dba", "performance"]
+    }
+  ]
+}

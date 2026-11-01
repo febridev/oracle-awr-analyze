@@ -29,8 +29,9 @@ def test_sections_in_order(rendered):
     assert all(f"<h2>{s}</h2>" in html for s in SECTIONS)
 
 
-def test_header_line(rendered):
-    assert "DB: PRODDB (DBID 1234567890) | Instance 1 (single instance) | 19.0.0.0.0 | CDB: NO" in rendered[0]
+def test_header_line(rendered, sample_meta):
+    m = sample_meta
+    assert f"DB: {m['db_name']} (DBID {m['dbid']}) | Instance 1 (single instance) | 19.0.0.0.0 | CDB: NO" in rendered[0]
 
 
 def test_five_charts(rendered):
@@ -121,9 +122,9 @@ def _top(md):
     return md[:md.index("## Appendix")]
 
 
-def test_header_lines_prd(rendered):
+def test_header_lines_prd(rendered, sample_meta):
     md = rendered[0]
-    assert "Host: db-host-01 | 34 CPU, 34 core, 125.63 GB | Linux x86 64-bit\n" in md
+    assert f"Host: {sample_meta['db_host']} | 34 CPU, 34 core, 125.63 GB | Linux x86 64-bit\n" in md
     assert ("Period: snap 3138-3162 | 2026-10-28 00:00:34 - 2026-10-29 00:00:13 | "
             "Elapsed 1439.65 min | DB Time 10255.65 min\n") in md
 
@@ -161,13 +162,13 @@ def test_none_sql_text(good_run):
         render(good_run, aud)
 
 
-def test_masking_by_audience(good_run):
-    probe = "ORD_VERSION = 2"
+def test_masking_by_audience(good_run, sample_meta):
+    probe = sample_meta["masked_probe"]
     u, uh = render(good_run, "user")
     b, bh = render(good_run, "both")
     d, _ = render(good_run, "dba")
     assert probe not in u and probe not in uh and probe not in _top(b) and probe not in bh[:bh.index("<h2>Appendix")]
-    assert probe in b[b.index("## Appendix"):] and probe in d and "ORD_VERSION = ?" in _top(b)
+    assert probe in b[b.index("## Appendix"):] and probe in d and sample_meta["masked_probe_masked"] in _top(b)
     assert d != b
     assert "## Executive summary" not in d
 

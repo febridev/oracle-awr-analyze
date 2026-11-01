@@ -1,12 +1,13 @@
 from parse_awr import split_module
 
 
-def test_sql_merge_and_module_split(sample_awr):
-    s = {r["sql_id"]: r for r in sample_awr["sql"]}["mon000000001a"]
-    assert s["program"] == "dbspicao11" and s["client_host"] == "db-host-01"
+def test_sql_merge_and_module_split(sample_awr, sample_meta):
+    s = {r["sql_id"]: r for r in sample_awr["sql"]}[sample_meta["monitoring_sql_id"]]
+    assert s["program"] == "dbspicao11" and s["client_host"] == sample_meta["db_host"]
     assert s["by_elapsed"]["pct_total"] == 7.47 and s["by_elapsed"]["executions"] == 2690
     assert s["text"].lower().startswith("select a.file_name")   # full text from Complete List
-    assert {r["sql_id"]: r for r in sample_awr["sql"]}["app000000001a"]["by_user_io"]["pct_total"] == 8.37
+    app = {r["sql_id"]: r for r in sample_awr["sql"]}[sample_meta["app_sql_id"]]
+    assert app["by_user_io"]["pct_total"] == sample_meta["app_sql_user_io_pct"]
 
 
 def test_split_module():

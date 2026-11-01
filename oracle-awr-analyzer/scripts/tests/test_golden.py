@@ -12,7 +12,7 @@ def test_sample_findings(sample_run):
     assert sev[("parse", "execute to parse")] == "P3"              # 2.75 < 50, soft 99.98 > 95
     assert sev[("memory", "swap")] == "P3"                         # VM_OUT 27,025,408 B / 24 h ≈ 1.07 MB/h < 10
     assert sev[("monitoring", "monitoring overhead")] == "P2"
-    assert f["sql_summary"]["monitoring_overhead_pct"] >= 11.18    # 85gj 7.47 + 2tc4 1.33 + cmu8 1.29 + 1f8d 1.09
+    assert f["sql_summary"]["monitoring_overhead_pct"] >= 11.18    # four monitoring SQL: 7.47 + 1.33 + 1.29 + 1.09
     assert not any(x["severity"] in ("P0", "P1") for x in f["findings"])
     assert f["load"]["avg"]["status"] == "Normal" and f["load"]["peak"]["status"] == "Busy"
     assert f["diff"]["suggested"] is False

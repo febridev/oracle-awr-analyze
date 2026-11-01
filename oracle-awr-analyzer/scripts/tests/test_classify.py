@@ -3,7 +3,9 @@ from classify_sql import classify
 from common import load_config
 from parse_awr import split_module
 
-CLS = load_config(None)["classification"]
+# App-specific hints are not shipped as defaults; the calibration cases use these invented ones.
+CLS = dict(load_config(None)["classification"], app_programs=["APPSRV", "APPWORKER"],
+           app_table_prefixes=["APP_", "ORD_", "LCK_"])
 DB = "db-host-01"
 
 
@@ -32,11 +34,12 @@ def test_dba_list_wins():
     assert classify({"module": "Poller", "text": "SELECT ID FROM LCK_SEMAPHORE"}, DB, cls)["category"] == "monitoring"
 
 
-def test_sample_known_sqls(sample_awr):
-    cat = {s["sql_id"]: classify(s, DB, CLS)["category"] for s in sample_awr["sql"]}
-    for i in ("mon000000001a", "mon000000002b", "mon000000003c", "mon000000004d"):
+def test_sample_known_sqls(sample_awr, sample_meta):
+    cls = dict(load_config(None)["classification"], **sample_meta["app_config"])
+    cat = {s["sql_id"]: classify(s, sample_meta["db_host"], cls)["category"] for s in sample_awr["sql"]}
+    for i in sample_meta["monitoring_sql_ids"]:
         assert cat[i] == "monitoring", i
-    assert cat["app000000001a"] == "user_app"
+    assert cat[sample_meta["app_sql_id"]] == "user_app"
 
 
 def test_same_rule_on_two_objects_is_one_signal():
@@ -45,7 +48,7 @@ def test_same_rule_on_two_objects_is_one_signal():
 
 
 def test_prefix_anchored_to_object_name():
-    assert classify({"module": "X", "text": "SELECT * FROM SHOP_ORDERS"}, DB, CLS)["category"] == "unknown"
-    assert classify({"module": "X", "text": "SELECT * FROM APP.OP_X"}, DB, CLS)["category"] == "user_app"
+    assert classify({"module": "X", "text": "SELECT * FROM RECORD_LOG"}, DB, CLS)["category"] == "unknown"
+    assert classify({"module": "X", "text": "SELECT * FROM APP.ORD_X"}, DB, CLS)["category"] == "user_app"
     dba = dict(CLS, dba={"app_table_prefixes": ["ORD_"]})
-    assert classify({"module": "X", "text": "SELECT * FROM DROP_X"}, DB, dba)["category"] == "unknown"
+    assert classify({"module": "X", "text": "SELECT * FROM BORD_X"}, DB, dba)["category"] == "unknown"

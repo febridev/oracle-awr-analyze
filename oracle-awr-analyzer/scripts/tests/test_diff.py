@@ -10,9 +10,9 @@ from render_report import render
 SCRIPT = "oracle-awr-analyzer/scripts/awr_diff_sql.py"
 
 
-def test_diff_sql_contents(sample_awr):
+def test_diff_sql_contents(sample_awr, sample_meta):
     s = diff_sql(sample_awr["meta"])
-    assert "SPOOL awr_diff_PRODDB.html" in s and "1234567890" in s
+    assert f"SPOOL awr_diff_{sample_meta['db_name']}.html" in s and str(sample_meta["dbid"]) in s
     assert "&base_begin_snap" in s and "&base_end_snap" in s and "3138" in s and "3162" in s
     lines = s.splitlines()
     sp = next(i for i, l in enumerate(lines) if l.startswith("SPOOL "))
@@ -42,20 +42,20 @@ def test_not_written_when_not_suggested(sample_run, good_run):
     assert not list(good_run.glob("awr_diff_*.sql"))
 
 
-def test_written_when_suggested(good_run):
+def test_written_when_suggested(good_run, sample_meta):
     fj = read_json(good_run / "findings.json")
     fj["diff"] = {"suggested": True, "reasons": ["why not"]}
     write_json(good_run / "findings.json", fj)
     assert _run(good_run).returncode == 0
-    assert (good_run / "awr_diff_PRODDB.sql").exists()
+    assert (good_run / f"awr_diff_{sample_meta['db_name']}.sql").exists()
 
 
-def test_report_section_8(good_run):
+def test_report_section_8(good_run, sample_meta):
     fj = read_json(good_run / "findings.json")
     fj["diff"] = {"suggested": True, "reasons": ["Saturated but ordinary workload"]}
     write_json(good_run / "findings.json", fj)
     md, _ = render(good_run, "dba")
     sec = md.split("AWR diff")[-1].split("Appendix")[0]
     for t in ("Saturated but ordinary workload", "3138", "3162", "same weekday", "20%", "restart",
-              "awr_diff_PRODDB.sql", "baseline snapshot IDs"):
+              f"awr_diff_{sample_meta['db_name']}.sql", "baseline snapshot IDs"):
         assert t in sec, t
