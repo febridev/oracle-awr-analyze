@@ -22,6 +22,9 @@ def _peak(awr: dict, t: dict, cpus: float) -> dict | None:
     L, meta, addm = t["load"], awr["meta"], awr.get("addm") or []
     if not addm or meta["elapsed_min"] <= L["long_period_min"]:
         return None
+    addm = [r for r in addm if r.get("avg_active_sessions") is not None]
+    if not addm:
+        return None
     a = max(addm, key=lambda r: r["avg_active_sessions"])
     aas = round(a["avg_active_sessions"], 2)
     ratio = round(aas / cpus, 2)
@@ -136,8 +139,8 @@ def _lat_state(t, storage, name, e):
     base = t["latency_events"].get(name)
     if not base:
         return False, None, False
-    avg = e.get("avg_wait_ms")
-    return True, avg is None or avg < _ms(t["rules"][base + ".warn"], storage), \
+    avg = e.get("avg_wait_ms")  # unknown latency (None) is never "healthy": no volume cap
+    return True, None if avg is None else avg < _ms(t["rules"][base + ".warn"], storage), \
         avg is not None and avg >= _ms(t["rules"][base + ".crit"], storage)
 
 
@@ -386,10 +389,10 @@ def _ver(rel):
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def _verify(f, rule_ids, awr, t, catalog):
+def _verify(f, rule_ids, awr, t, catalog, extra=()):
     by_id = {q.get("id"): q for q in catalog.values()}
     have, vals, out = _ver(awr["meta"].get("release")), _vals(f, awr), []
-    for vid in dict.fromkeys(v for r in rule_ids for v in t["rules"][r].get("verify_sql") or []):
+    for vid in dict.fromkeys([v for r in rule_ids for v in t["rules"][r].get("verify_sql") or []] + list(extra)):
         q = by_id.get(vid)
         e = {"id": vid, "title": q and q.get("title"), "sql": None, "license": q and q.get("license"), "available": False,
              "params": {}}
@@ -419,7 +422,10 @@ def finalize(cands: list, awr: dict, L: dict, cfg: dict, catalog: dict) -> list:
     # 3. caps
     elapsed = meta.get("elapsed_min")
     quiet = L["idle"] or (elapsed is not None and elapsed < t["load"]["short_period_min"])
+    extra: dict = {}  # finding subject -> extra verify ids
     for f in fs:
+        if f["domain"] in t["event_share_verify"] and any(r.startswith("event.share") for r in f["triggered_by"]):
+            extra[f["subject"]] = list(t["event_share_verify"][f["domain"]])
         if quiet and f["load_based"]:
             f["confidence"] = "low"
             if f["severity"] < "P3":
@@ -431,6 +437,11 @@ def finalize(cands: list, awr: dict, L: dict, cfg: dict, catalog: dict) -> list:
             f["severity_adjustments"].append(
                 "capped to P2: high share of DB time with healthy latency - a volume problem, not storage; "
                 "see SQL ordered by User I/O Wait Time and Segments by Physical Reads")
+            extra[f["subject"]] = extra.get(f["subject"], []) + list(t["volume_cap_verify"])
+            i, e = _find(awr, t, f["subject"])
+            if e is not None and e.get("avg_wait_ms") is not None:
+                f["evidence"].append(_ev("Average wait (ms)", e["avg_wait_ms"], "Foreground Wait Events",
+                                         f"fg_events[{i}].avg_wait_ms"))
     # 4. escalation
     crit_ev = [f["subject"] for f in fs if f["domain"] == "io" and any(r.endswith(".crit") for r in f["triggered_by"])]
     user_io = {s["sql_id"] for s in awr.get("sql") or [] if s.get("by_user_io")}
@@ -444,7 +455,7 @@ def finalize(cands: list, awr: dict, L: dict, cfg: dict, catalog: dict) -> list:
         if not f["confidence"]:
             f["confidence"] = "low" if meta.get("restart") else _class_conf(f, awr, t)
         f["triggered_by"].sort(key=lambda r: t["rules"][r]["severity"])
-        f["verify_sql"] = _verify(f, f["triggered_by"], awr, t, catalog)
+        f["verify_sql"] = _verify(f, f["triggered_by"], awr, t, catalog, extra.get(f["subject"], ()))
         f["fallback"] = t["rules"][f["triggered_by"][0]]["fallback"]
         del f["latency_ok"]
     fs.sort(key=lambda f: (f["severity"], -(f["pct_db_time"] or 0), f["subject"]))
@@ -492,6 +503,11 @@ def _notes(awr, L, cfg):
         n.append("RAC sections not analyzed in v1")
     if L["hyperthreading"]:
         n.append("CPU count is much higher than core count (hyperthreading); load ratio uses logical CPUs")
+    if awr.get("missing_sections"):
+        n.append("Sections missing from this AWR: " + ", ".join(dict.fromkeys(
+            x["section"] if isinstance(x, dict) else str(x) for x in awr["missing_sections"])))
+    if (m.get("elapsed_min") or 0) > cfg["thresholds"]["load"]["long_period_min"] and not L.get("peak"):
+        n.append("Peak unavailable: Top ADDM Findings absent; severity uses the period average.")
     return n + list(m.get("notes") or [])
 
 
@@ -507,7 +523,11 @@ def main(argv=None) -> int:
         print(e, file=sys.stderr)
         return 2
     run = Path(a.run_dir)
-    awr = read_json(run / "awr.json")
+    try:
+        awr = read_json(run / "awr.json")
+    except (OSError, ValueError) as e:
+        print(f"error: cannot read {run / 'awr.json'}: {e}", file=sys.stderr)
+        return 2
     L = load_status(awr, cfg["thresholds"])
     cands = all_candidates(awr, L, cfg)
     findings = finalize(cands, awr, L, cfg, load_catalog(SKILL_DIR / "references" / "verify_sql"))

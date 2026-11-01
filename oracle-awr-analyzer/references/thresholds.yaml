@@ -14,6 +14,9 @@ min_pct_db_time: 1.0                      # event latency rules ignore events be
 event_share_exclude: ["control file sequential read", "library cache: mutex X", "cursor: pin S wait on X",   # own rules / sum rules
   "enq: TX - row lock contention", "enq: TM*", "buffer busy waits", "latch: cache buffers chains", "library cache lock",
   "SQL*Net more data to client", "SQL*Net message to client"]
+# extra verification queries: appended to event-share findings of a domain, and to findings the volume cap applies to
+event_share_verify: {redo: [V-10]}
+volume_cap_verify: [V-08, V-09]
 monitoring_categories: [monitoring, maintenance]
 watch_params: [optimizer_mode, optimizer_index_cost_adj, optimizer_features_enable, cursor_sharing, db_file_multiblock_read_count]
 mutex_events: ["library cache: mutex X", "cursor: pin S wait on X"]
