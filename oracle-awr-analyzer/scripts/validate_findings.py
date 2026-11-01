@@ -1,0 +1,160 @@
+"""Validate findings.json (against awr.json) and the agent-written interpretation.json."""
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+from common import read_json
+
+REQUIRED = ("id", "domain", "subject", "title", "severity", "triggered_by", "load_based", "confidence",
+            "evidence", "verify_sql", "fallback", "severity_adjustments")
+TEXT = ("facts", "hypothesis", "user_impact", "recommendation", "change_risk")
+# shortcut: misses paraphrases; upgrade if A6 review finds leaks
+CAUSAL = re.compile(r"\b(because|due to|caused by|likely|probably|suggests)\b", re.I)
+NUM = re.compile(r"(?<![\w.$-])\d+(?:[.,]\d+)?(?![\w.])")
+IDENT = re.compile(r"\bP[0-4]\b|\bV-\d+\b|\bF\d{2}\b|\b[0-9a-z]{13}\b|\b\d+(?:\.\d+){3,}\b")
+_TOK = re.compile(r"[^.\[\]]+|\[\d+\]")
+
+
+def resolve(awr: dict, path: str) -> Any:
+    cur: Any = awr
+    for t in _TOK.findall(path):
+        try:
+            cur = cur[int(t[1:-1])] if t[0] == "[" else cur[t]
+        except (KeyError, IndexError, TypeError):
+            raise KeyError(path)
+    return cur
+
+
+def _isnum(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _leaves(o, out):
+    if _isnum(o):
+        out.append(float(o))
+    elif isinstance(o, dict):
+        for v in o.values():
+            _leaves(v, out)
+    elif isinstance(o, list):
+        for v in o:
+            _leaves(v, out)
+    return out
+
+
+def _same(a, b) -> bool:
+    return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9) if _isnum(a) and _isnum(b) else a == b
+
+
+def _unknown_numbers(text: str, ids: list, rounded: list, exact: list) -> list:
+    text = IDENT.sub(" ", text)
+    for i in ids:
+        text = re.sub(rf"\b{re.escape(str(i))}\b", " ", text)
+    bad = []
+    for m in NUM.findall(text):
+        s = m.replace(",", "") if re.fullmatch(r"\d{1,3}(,\d{3})+", m) else m.replace(",", ".")
+        d = len(s.split(".")[1]) if "." in s else 0
+        # shortcut: other awr.json values must match exactly (rounding them admits near-miss inventions); upgrade if A6 review finds legit rounding rejected
+        if not (any(abs(round(v, d) - float(s)) < 1e-9 for v in rounded)
+                or any(abs(v - float(s)) < 1e-9 for v in exact)):
+            bad.append(m)
+    return bad
+
+
+def validate(run_dir: Path):
+    run = Path(run_dir)
+    errs: list = []
+    warns: list = []
+    awr, fj = read_json(run / "awr.json"), read_json(run / "findings.json")
+    findings = fj.get("findings", [])
+    allv = _leaves(awr, [])
+    meta = awr.get("meta", {})
+    ids = [meta.get(k) for k in ("begin_snap", "end_snap", "dbid") if meta.get(k) is not None]
+    by_id = {}
+    for f in findings:
+        fid = f.get("id", "?")
+        by_id[fid] = f
+        for k in REQUIRED:
+            if k not in f:
+                errs.append(f"{fid}.{k}: required field missing")
+        for k in ("evidence", "verify_sql", "triggered_by"):
+            if k in f and not f[k]:
+                errs.append(f"{fid}.{k}: must not be empty")
+        for e in f.get("evidence") or []:
+            try:
+                got = resolve(awr, e["path"])
+                if not _same(got, e["value"]):
+                    errs.append(f"{fid}.evidence: {e['path']} is {got!r} in awr.json but finding says {e['value']!r}")
+            except (KeyError, TypeError):
+                errs.append(f"{fid}.evidence: path {e.get('path') if isinstance(e, dict) else e!r} does not resolve")
+        v = f.get("verify_sql") or []
+        if v and not any(x.get("available") for x in v):
+            warns.append(f"{fid}.verify_sql: no verify query is available for this finding")
+
+    ip = run / "interpretation.json"
+    if not ip.exists():
+        warns.append("interpretation.json: not found; report will use fallback text")
+        return errs, warns
+    try:
+        interp = read_json(ip)
+        assert isinstance(interp, dict)
+    except Exception as ex:  # malformed JSON or wrong top-level type: report, never traceback
+        errs.append(f"interpretation.json: cannot read as a JSON object ({ex.__class__.__name__})")
+        return errs, warns
+    summ = interp.get("executive_summary", [])
+    if not isinstance(summ, list) or not all(isinstance(s, str) for s in summ):
+        errs.append("interpretation.json.executive_summary: must be a list of strings")
+    else:
+        if len(summ) > 5:
+            errs.append(f"executive_summary: {len(summ)} lines, max 5")
+        for s in summ:
+            for n in _unknown_numbers(s, ids, [], allv):
+                errs.append(f"executive_summary: number {n} not found in the report data")
+    fi = interp.get("findings", {})
+    if not isinstance(fi, dict):
+        errs.append("interpretation.json.findings: must be an object")
+        return errs, warns
+    for fid, ent in fi.items():
+        if fid not in by_id:
+            errs.append(f"{fid}: unknown finding id")
+            continue
+        if not isinstance(ent, dict):
+            errs.append(f"{fid}: entry must be an object")
+            continue
+        evv = [e["value"] for e in by_id[fid].get("evidence") or [] if isinstance(e, dict) and _isnum(e.get("value"))]
+        for k, val in ent.items():
+            if k == "approval_required":
+                if not isinstance(val, bool):
+                    errs.append(f"{fid}.{k}: must be true or false, got {type(val).__name__}")
+            elif k not in TEXT:
+                errs.append(f"{fid}.{k}: unknown field")
+            elif not isinstance(val, str):
+                errs.append(f"{fid}.{k}: must be a string, got {type(val).__name__}")
+            else:
+                for n in _unknown_numbers(val, ids, evv, allv):
+                    errs.append(f"{fid}.{k}: number {n} not found in the report data")
+                if k == "facts" and (m := CAUSAL.search(val)):
+                    errs.append(f"{fid}.facts: causal wording '{m.group(0)}' belongs in hypothesis")
+    for fid in by_id:
+        if fid not in fi:
+            warns.append(f"{fid}: no interpretation entry; fallback text will be used")
+    return errs, warns
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Validate findings.json and interpretation.json")
+    ap.add_argument("run_dir")
+    errs, warns = validate(Path(ap.parse_args(argv).run_dir))
+    for e in errs:
+        print(f"ERROR {e}")
+    for w in warns:
+        print(f"WARN {w}")
+    return 1 if errs else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
