@@ -1,24 +1,4 @@
-import pathlib
-import subprocess
-import sys
-
-import pytest
 from common import read_json
-
-from conftest import run_parse
-
-SCR = "oracle-awr-analyzer/scripts/"
-
-
-@pytest.fixture(scope="session")
-def sample_run(tmp_path_factory):
-    src = pathlib.Path(__file__).resolve().parents[2] / "examples" / "awrrpt_1_3138_3162.html"
-    rc, run = run_parse(src, tmp_path_factory.mktemp("g"))
-    assert rc == 0
-    for s in ("classify_sql.py", "analyze.py"):
-        r = subprocess.run([sys.executable, SCR + s, str(run)], capture_output=True, text=True)
-        assert r.returncode == 0, r.stderr
-    return run
 
 
 def test_sample_findings(sample_run):

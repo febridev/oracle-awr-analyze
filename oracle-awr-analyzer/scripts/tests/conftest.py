@@ -1,4 +1,7 @@
 import pathlib
+import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -77,3 +80,31 @@ def max_by_subject(cands):
         k = (c["domain"], c["subject"])
         out[k] = min(out.get(k, c["severity"]), c["severity"])
     return out
+
+
+@pytest.fixture(scope="session")
+def sample_run(tmp_path_factory):
+    src = pathlib.Path(__file__).resolve().parents[2] / "examples" / "awrrpt_1_3138_3162.html"
+    rc, run = run_parse(src, tmp_path_factory.mktemp("g"))
+    assert rc == 0
+    for s in ("classify_sql.py", "analyze.py"):
+        r = subprocess.run([sys.executable, "oracle-awr-analyzer/scripts/" + s, str(run)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    return run
+
+
+@pytest.fixture
+def good_run(sample_run, tmp_path):
+    from common import read_json, write_json
+    run = tmp_path / "run"
+    shutil.copytree(sample_run, run)
+    fs = read_json(run / "findings.json")["findings"]
+    interp = {"executive_summary": ["The database is Normal on average."], "findings": {}}
+    for f in fs:
+        e = f["evidence"][0]
+        v = e["value"]
+        facts = f"{f['title']}: {e['metric']} was {v}." if isinstance(v, (int, float)) else f"{f['title']}."
+        interp["findings"][f["id"]] = {"facts": facts, "hypothesis": "", "user_impact": "", "recommendation": "",
+                                       "change_risk": "", "approval_required": False}
+    write_json(run / "interpretation.json", interp)
+    return run

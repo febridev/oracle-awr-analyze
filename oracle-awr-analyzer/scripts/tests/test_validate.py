@@ -1,27 +1,7 @@
-import json
-import shutil
-
 import pytest
 
 from common import read_json, write_json
-from test_golden import sample_run  # noqa: F401  (session fixture)
 from validate_findings import main, resolve, validate
-
-
-@pytest.fixture
-def good_run(sample_run, tmp_path):  # noqa: F811
-    run = tmp_path / "run"
-    shutil.copytree(sample_run, run)
-    fs = read_json(run / "findings.json")["findings"]
-    interp = {"executive_summary": ["The database is Normal on average."], "findings": {}}
-    for f in fs:
-        e = f["evidence"][0]
-        v = e["value"]
-        facts = f"{f['title']}: {e['metric']} was {v}." if isinstance(v, (int, float)) else f"{f['title']}."
-        interp["findings"][f["id"]] = {"facts": facts, "hypothesis": "", "user_impact": "", "recommendation": "",
-                                       "change_risk": "", "approval_required": False}
-    write_json(run / "interpretation.json", interp)
-    return run
 
 
 def edit_findings(run, fn):
