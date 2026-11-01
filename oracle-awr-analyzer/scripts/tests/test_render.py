@@ -191,3 +191,9 @@ def test_appendix_contents(rendered):
               "Logical CPUs: 34", "Hyperthreading", "Limitations", "single instance only", "RAC, PDB and Exadata are not analyzed",
               "HTML input only", "English only", "efficiency.library_hit_pct"):
         assert t in app, t
+
+
+def test_hypothesis_label_not_doubled(good_run):
+    _edit(good_run, "interpretation.json", lambda d: d["findings"]["F01"].__setitem__("hypothesis", "Hypothesis: reads are many."))
+    md, _ = render(good_run, "both")
+    assert "Hypothesis: reads are many." in md and "Hypothesis: Hypothesis" not in md

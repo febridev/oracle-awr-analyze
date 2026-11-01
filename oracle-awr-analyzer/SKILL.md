@@ -65,7 +65,7 @@ Do not re-derive severity, thresholds or categories.
   "findings": {
     "F01": {
       "facts": "What the evidence shows, numbers only from this finding.",
-      "hypothesis": "Possible cause. Say 'Hypothesis:' and name how V-xx would confirm it.",
+      "hypothesis": "Possible cause and how V-xx would confirm it. Do not write the label; the report adds 'Hypothesis:'.",
       "user_impact": "What an application user would notice, no jargon.",
       "recommendation": "What to look at or change, in words.",
       "change_risk": "What could go wrong if the change is made.",
@@ -79,25 +79,34 @@ Write an entry for every finding id. Use only these six fields, and only ids tha
 (extra fields, unknown ids and wrong types are errors; `approval_required` is a JSON boolean).
 Output valid JSON only (no comments, no trailing commas).
 
-Rules the validator enforces:
+The validator checks (errors fail validation):
 
-- Every number in a finding's prose must come from that finding's `evidence` values (rounding to the precision you
-  write is fine, 0.587 -> "0.59") or equal a value in `awr.json` exactly. Executive-summary numbers may round-match
-  any finding's evidence. Do not compute new numbers (no sums, ratios, "twice as much", per-hour conversions).
-  If a number is not in the evidence, describe it in words instead.
-- Do not glue numbers to words or symbols: write "21.4 ms", not "x21.4" or "21.4x". Spell units out and keep
-  one space between number and unit. Avoid ranges like "5-10" and counts you invented ("three sessions").
+- Number provenance. Every number in a finding's prose must come from that finding's `evidence` values (rounding to
+  the precision you write is fine, 0.587 -> "0.59") or equal a value in `awr.json` exactly. Executive-summary numbers
+  may round-match any finding's evidence. A "number not found" error usually means a derived, rounded-too-far or glued
+  number (sums, ratios, "twice as much", per-hour conversions, "21.4x"). Describe it in words or use the exact value.
+  Write "21.4 ms", not "x21.4"; keep one space between number and unit.
 - Allowed identifiers (not treated as numbers): P0-P4, the finding's own V-xx ids, existing Fxx ids, real SQL IDs,
   snap ids, the exact release string.
-- `facts` must not contain: because, due to, caused by, likely, probably, suggests. Causes go in `hypothesis`
-  and are labeled as hypotheses. Use `wait_events.md` for common causes.
+- `facts` must not contain: because, due to, caused by, likely, probably, suggests. Causes go in `hypothesis`.
+- Only the six fields above, with the right types (`approval_required` is a JSON boolean), only existing finding ids.
+- `executive_summary` has at most 5 lines.
+- No executable change commands in any prose or in the summary: `ALTER SYSTEM/SESSION/INDEX/TABLE/DATABASE ...`,
+  `CREATE INDEX x ON ...`, `DROP`, `TRUNCATE TABLE`, `GRANT/REVOKE`, `KILL SESSION`, `EXEC pkg.proc`, `BEGIN ... END;`,
+  code fences, backtick-quoted SQL keywords, or any line ending in `;`. Describe changes in prose instead
+  ("consider creating an index on the table", "rebuild the index in a maintenance window").
+- A finding with no entry is only a WARN: the report falls back to standard text. Write an entry for every finding anyway.
+
+You must self-check (not machine-enforced):
+
+- Do not write the "Hypothesis:" label yourself; the renderer adds it.
+- Cite only your own finding's V-xx ids.
 - `user_impact` is plain language: what slows down for whom, not event names or internals.
-- No executable change commands (no `ALTER`, `DROP`, `EXEC`, `GRANT`, shell lines, hints to paste). Describe the
-  change in prose and set `approval_required: true` for anything that changes the database, schema, parameters or
-  application. Use `false` only for read-only checks.
-- Keep the severity story consistent with `severity_adjustments` and `confidence`.
-  If the storage profile was assumed (`notes`), say latency judgments rest on that assumption.
-- If a section is missing from the report (`meta.missing_sections`), say it is absent; do not guess its content.
+- All fields non-empty. `approval_required` is `true` for any configuration, parameter, index, schema or application
+  change; `false` only for read-only checks.
+- Keep the story consistent with `severity_adjustments` and `confidence`. If the storage profile was assumed
+  (`notes`), say latency judgments rest on that assumption.
+- If a section is missing (`meta.missing_sections`), say it is absent; do not guess its content.
 
 ## Config (optional `--config my.yaml`)
 

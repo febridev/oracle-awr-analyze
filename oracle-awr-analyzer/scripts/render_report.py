@@ -123,7 +123,7 @@ def _finding(f, ent, rejected, inst, show_dba):
     items = [f'Domain: {f["domain"]} | Instance: {inst} | Confidence: {f["confidence"]}',
              f"Evidence: {ev}",
              "Facts: " + (ent.get("facts") or "see the measured values under Evidence"),
-             "Hypothesis: " + (ent.get("hypothesis") or fb.get("cause") or "not provided"),
+             "Hypothesis: " + (re.sub(r"^\s*hypothesis:\s*", "", ent.get("hypothesis") or "", flags=re.I) or fb.get("cause") or "not provided"),
              "User impact: " + (ent.get("user_impact") or fb.get("impact") or "not provided")]
     if show_dba:
         items.append(f"How to verify: see SQL {ids} in the Verification SQL section")

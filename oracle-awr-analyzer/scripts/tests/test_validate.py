@@ -148,3 +148,21 @@ def test_summary_rounds_to_evidence_only(good_run):
         return validate(good_run)[0]
     assert summ("about 35.6% of DB time") == []
     assert any("41.2" in e for e in summ("about 41.2% of DB time"))
+
+
+@pytest.mark.parametrize("text", ["ALTER INDEX ix_a REBUILD;", "alter system set cursor_sharing=force",
+                                  "```sql\nselect 1\n```", "run `DROP` it", "Rebuild it.\nDone;"])
+def test_change_command_rejected(good_run, text):
+    edit_interp(good_run, "F01", "recommendation", text)
+    assert any("F01.recommendation" in e and "executable change command" in e for e in validate(good_run)[0])
+    d = read_json(good_run / "interpretation.json")
+    d["executive_summary"] = [text]
+    write_json(good_run / "interpretation.json", d)
+    assert any("executive_summary" in e and "executable change command" in e for e in validate(good_run)[0])
+
+
+@pytest.mark.parametrize("text", ["Consider creating an index on APP_CALL_EVENTS.",
+                                  "Rebuild the index during a maintenance window."])
+def test_change_prose_accepted(good_run, text):
+    edit_interp(good_run, "F01", "recommendation", text)
+    assert validate(good_run)[0] == []

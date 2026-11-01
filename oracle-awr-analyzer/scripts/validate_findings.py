@@ -16,6 +16,12 @@ TEXT = ("facts", "hypothesis", "user_impact", "recommendation", "change_risk")
 # shortcut: misses paraphrases; upgrade if A6 review finds leaks
 CAUSAL = re.compile(r"\b(because|due to|caused by|likely|probably|suggests)\b", re.I)
 NUM = re.compile(r"(?<![\w.,])(-?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)")
+# shortcut: pattern list, not a SQL parser; extend when review finds a command shape that slips through
+CMD = re.compile(
+    r"\bALTER\s+(SYSTEM|SESSION|INDEX|TABLE|DATABASE)\s+\S|\bCREATE\s+(UNIQUE\s+|BITMAP\s+)?INDEX\s+\w+\s+ON\b"
+    r"|\bDROP\s+(INDEX|TABLE|USER)\s+\w|\bTRUNCATE\s+TABLE\s+\w|\b(GRANT|REVOKE)\s+\w+.*\b(TO|FROM)\s+\w"
+    r"|\bKILL\s+SESSION|\bEXEC(UTE)?\s+\w+\.\w+|\bBEGIN\b.*\bEND\s*;|```"
+    r"|`\s*(SELECT|INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|GRANT|EXEC\w*)\b|;[ \t]*$", re.I | re.M | re.S)
 LABEL = re.compile(r"(?<![\w.-])P[0-4](?![\w-]|\.\d)")
 _TOK = re.compile(r"[^.\[\]]+|\[\d+\]")
 
@@ -116,6 +122,8 @@ def validate(run_dir: Path):
         if len(summ) > 5:
             errs.append(f"executive_summary: {len(summ)} lines, max 5")
         for s in summ:
+            if CMD.search(s):
+                errs.append("executive_summary: contains an executable change command")
             for n in _unknown_numbers(s, ids + [v for f in findings for v in vids(f)], all_ev, allv):
                 errs.append(f"executive_summary: number {n} not found in the report data")
     fi = interp.get("findings", {})
@@ -139,6 +147,8 @@ def validate(run_dir: Path):
             elif not isinstance(val, str):
                 errs.append(f"{fid}.{k}: must be a string, got {type(val).__name__}")
             else:
+                if CMD.search(val):
+                    errs.append(f"{fid}.{k}: contains an executable change command")
                 for n in _unknown_numbers(val, ids + vids(by_id[fid]), evv, allv):
                     errs.append(f"{fid}.{k}: number {n} not found in the report data")
                 if k == "facts" and (m := CAUSAL.search(val)):
