@@ -15,8 +15,8 @@ REQUIRED = ("id", "domain", "subject", "title", "severity", "triggered_by", "loa
 TEXT = ("facts", "hypothesis", "user_impact", "recommendation", "change_risk")
 # shortcut: misses paraphrases; upgrade if A6 review finds leaks
 CAUSAL = re.compile(r"\b(because|due to|caused by|likely|probably|suggests)\b", re.I)
-NUM = re.compile(r"(?<![\w.$-])\d+(?:[.,]\d+)?(?![\w.])")
-IDENT = re.compile(r"\bP[0-4]\b|\bV-\d+\b|\bF\d{2}\b|\b[0-9a-z]{13}\b|\b\d+(?:\.\d+){3,}\b")
+NUM = re.compile(r"(?<![\w.,])(-?)(\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)")
+LABEL = re.compile(r"(?<![\w.-])P[0-4](?![\w-]|\.\d)")
 _TOK = re.compile(r"[^.\[\]]+|\[\d+\]")
 
 
@@ -50,18 +50,19 @@ def _same(a, b) -> bool:
     return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9) if _isnum(a) and _isnum(b) else a == b
 
 
-def _unknown_numbers(text: str, ids: list, rounded: list, exact: list) -> list:
-    text = IDENT.sub(" ", text)
-    for i in ids:
-        text = re.sub(rf"\b{re.escape(str(i))}\b", " ", text)
+def _unknown_numbers(text: str, known: list, rounded: list, exact: list) -> list:
+    """Numbers in text matching no allowed value. known = identifier tokens (snap ids, real sql/verify/finding ids, release)."""
+    text = LABEL.sub(" ", text)
+    for t in sorted(map(str, known), key=len, reverse=True):
+        text = re.sub(rf"(?<![\w.-]){re.escape(t)}(?![\w-]|\.\d)", " ", text)
     bad = []
-    for m in NUM.findall(text):
-        s = m.replace(",", "") if re.fullmatch(r"\d{1,3}(,\d{3})+", m) else m.replace(",", ".")
-        d = len(s.split(".")[1]) if "." in s else 0
+    for sign, m in NUM.findall(text):
+        v = float(m.replace(",", "")) * (-1 if sign else 1)
+        d = len(m.split(".")[1]) if "." in m and "e" not in m.lower() else 0
         # shortcut: other awr.json values must match exactly (rounding them admits near-miss inventions); upgrade if A6 review finds legit rounding rejected
-        if not (any(abs(round(v, d) - float(s)) < 1e-9 for v in rounded)
-                or any(abs(v - float(s)) < 1e-9 for v in exact)):
-            bad.append(m)
+        if not (any(abs(round(x, d) - v) < 1e-9 for x in rounded)
+                or any(math.isclose(x, v, rel_tol=1e-9, abs_tol=1e-9) for x in rounded + exact)):
+            bad.append(sign + m)
     return bad
 
 
@@ -73,7 +74,10 @@ def validate(run_dir: Path):
     findings = fj.get("findings", [])
     allv = _leaves(awr, [])
     meta = awr.get("meta", {})
-    ids = [meta.get(k) for k in ("begin_snap", "end_snap", "dbid") if meta.get(k) is not None]
+    ids = [meta.get(k) for k in ("begin_snap", "end_snap", "dbid", "release") if meta.get(k) is not None]
+    ids += [x["sql_id"] for x in awr.get("sql") or [] if x.get("sql_id")] + [f["id"] for f in findings if "id" in f]
+    vids = lambda f: [v["id"] for v in f.get("verify_sql") or [] if isinstance(v, dict) and v.get("id")]  # noqa: E731
+    all_ev = [e["value"] for f in findings for e in f.get("evidence") or [] if isinstance(e, dict) and _isnum(e.get("value"))]
     by_id = {}
     for f in findings:
         fid = f.get("id", "?")
@@ -112,7 +116,7 @@ def validate(run_dir: Path):
         if len(summ) > 5:
             errs.append(f"executive_summary: {len(summ)} lines, max 5")
         for s in summ:
-            for n in _unknown_numbers(s, ids, [], allv):
+            for n in _unknown_numbers(s, ids + [v for f in findings for v in vids(f)], all_ev, allv):
                 errs.append(f"executive_summary: number {n} not found in the report data")
     fi = interp.get("findings", {})
     if not isinstance(fi, dict):
@@ -135,7 +139,7 @@ def validate(run_dir: Path):
             elif not isinstance(val, str):
                 errs.append(f"{fid}.{k}: must be a string, got {type(val).__name__}")
             else:
-                for n in _unknown_numbers(val, ids, evv, allv):
+                for n in _unknown_numbers(val, ids + vids(by_id[fid]), evv, allv):
                     errs.append(f"{fid}.{k}: number {n} not found in the report data")
                 if k == "facts" and (m := CAUSAL.search(val)):
                     errs.append(f"{fid}.facts: causal wording '{m.group(0)}' belongs in hypothesis")
