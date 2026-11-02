@@ -37,6 +37,22 @@ For reports longer than two hours (for example a daily 24-hour AWR), it reports 
 | P3 Low | Optimization opportunity | Backlog |
 | P4 Info | Configuration note, no measured impact | Record only |
 
+### P0 criteria
+
+A finding is P0 only when one of these rules fires (default thresholds):
+
+| Rule | Condition |
+|---|---|
+| `cpu.load.p0` | Load ratio ≥ 2.0 (active sessions more than twice the CPU count) and host CPU idle < 5% |
+| `event.share.p0` | One wait event takes ≥ 30% of DB time and its latency is past the critical threshold (single-block reads: 8 ms flash, 20 ms HDD/SAN; multi-block: 20 / 40 ms) |
+| `conc.combined.p0` | Lock and latch contention events together take ≥ 30% of DB time |
+| `redo.ckpt.p0` | `log file switch (checkpoint incomplete)` is the top non-idle wait event |
+
+All four are load-based, so they can be lowered:
+
+- **Quiet period:** if the database is idle (load ratio < 0.10) or the report covers less than 10 minutes, the finding is capped at P3 with low confidence.
+- **Volume cap:** a high share of DB time with healthy latency is capped at P2. That is a volume problem, not a storage emergency.
+
 Every threshold lives in `oracle-awr-analyzer/references/thresholds.yaml` and can be overridden per environment. Each finding lists the rule ids that triggered it (`triggered_by`). If a severity was capped or raised, the finding also says why (`severity_adjustments`). For example, a wait event with a high share of DB time but healthy latency is capped at P2 as "a volume problem, not storage".
 
 ## How it works
