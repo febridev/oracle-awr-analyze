@@ -74,3 +74,29 @@ def test_long_labels_truncated_with_full_title():
         shown = texts[0].firstChild.data
         assert len(shown) <= 31 and shown.endswith("…")
         assert long in texts[0].getElementsByTagName("title")[0].firstChild.data
+
+
+def test_priority_strip_counts_and_escaping():
+    from xml.dom.minidom import parseString
+    from svg import priority_strip
+    s = priority_strip([{"level": "P1", "name": "High & <b>", "action": "Today", "count": 2},
+                        {"level": "P4", "name": "Info", "action": "Record only", "count": 0}], title="t")
+    parseString(s)
+    assert ">2<" in s and ">0<" in s and "High &amp; &lt;b&gt;" in s and SEVERITY_COLORS["P1"] in s
+    assert SEVERITY_COLORS["P4"] not in s  # an empty level carries no severity color
+
+
+def test_domain_grid_cells():
+    from xml.dom.minidom import parseString
+    from svg import domain_grid
+    s = domain_grid([{"label": "<io>", "counts": {"P2": 3}}], title="t")
+    parseString(s)
+    assert "&lt;io&gt;" in s and ">3<" in s and all(p in s for p in SEVERITY_COLORS)
+    assert not re.search(r"<script|href=|src=|foreignObject", s)
+    assert "no data" in domain_grid([])
+
+
+def test_title_is_visible_not_only_on_hover():
+    s = hbar([{"label": "a", "value": 1, "tag": "", "color": NEUTRAL}], title="My chart")
+    assert re.search(r"<text[^>]*>My chart</text>", s)
+    assert 'height="52"' in s  # one row plus the title band

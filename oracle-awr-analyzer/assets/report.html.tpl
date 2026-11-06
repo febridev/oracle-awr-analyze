@@ -18,7 +18,8 @@ th,td{border:1px solid #d0d0d0;padding:4px 8px;text-align:left;vertical-align:to
 th{background:#f3f3f3}
 td.sql{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.8rem;max-width:420px;word-break:break-all}
 pre{background:#f6f6f6;border:1px solid #ddd;padding:8px;overflow-x:auto;font-size:.8rem;white-space:pre-wrap;word-break:break-word}
-svg{max-width:100%;height:auto;margin:.4rem 0}
+svg{display:block;max-width:100%;height:auto;margin:.8rem 0 .3rem}
+ul.cap{list-style:none;padding:0;margin:0 0 1.2rem;font-size:.85rem;color:#444}
 footer{margin-top:2.5rem;border-top:1px solid #ddd;padding-top:8px;font-size:.85rem;color:#444}
 @media print{body{max-width:none;padding:0}}
 </style>

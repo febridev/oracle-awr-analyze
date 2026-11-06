@@ -12,7 +12,7 @@ CATEGORY_COLORS = {
 }
 NEUTRAL = "#6b6b6b"
 
-W, ROW, LABEL_W, INK = 640, 28, 220, "#1f1f1f"
+W, ROW, LABEL_W, INK, TITLE_H = 640, 28, 220, "#1f1f1f", 24
 
 
 def _fmt(v: float) -> str:
@@ -26,9 +26,11 @@ def _cut(s: str, n: int) -> str:
 def _svg(h: int, title: str, body: str) -> str:
     raw = title or "chart"
     t = escape(raw)
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {h}" width="{W}" height="{h}" '
+    head = TITLE_H if title else 0  # visible title: a hover-only <title> is invisible in print and on touch screens
+    shown = f'<text x="0" y="14" fill="{INK}" font-weight="600" font-size="13">{t}</text><g transform="translate(0,{head})">{body}</g>' if title else body
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {h + head}" width="{W}" height="{h + head}" '
             f'role="img" aria-label="{escape(raw, {chr(34): "&quot;"})}" font-family="sans-serif" font-size="12">'
-            f'<title>{t}</title>{body}</svg>')
+            f'<title>{t}</title>{shown}</svg>')
 
 
 def hbar(rows, ref_line=None, ref_label="", unit="", title=""):
@@ -45,12 +47,12 @@ def hbar(rows, ref_line=None, ref_label="", unit="", title=""):
         txt = f'{_fmt(r["value"])}{escape(unit)}' + (f' {escape(r["tag"])}' if r.get("tag") else "")
         out.append(f'<text x="{LABEL_W - 6}" y="{y + 18}" text-anchor="end" fill="{INK}">{escape(_cut(str(r["label"]), 30))}<title>{escape(str(r["label"]))}</title></text>'
                    f'<rect x="{x0}" y="{y + 5}" width="{w:.1f}" height="18" fill="{r["color"]}"/>'
-                   f'<text x="{x0 + w + 6:.1f}" y="{y + 18}" fill="{INK}">{txt}</text>')
+                   f'<text x="{x0 + w + 6:.1f}" y="{y + 18}" fill="{INK}" stroke="#fff" stroke-width="3" paint-order="stroke">{txt}</text>')
     h = top + len(rows) * ROW
     if ref_line is not None:
         rx = x0 + ref_line / axis * bar_max
-        out.append(f'<line class="ref" x1="{rx:.1f}" y1="{top - 4}" x2="{rx:.1f}" y2="{h}" stroke="{INK}" stroke-dasharray="4 3"/>'
-                   f'<text x="{rx:.1f}" y="12" text-anchor="middle" fill="{INK}">{escape(ref_label)}</text>')
+        out.insert(0, f'<line class="ref" x1="{rx:.1f}" y1="{top - 4}" x2="{rx:.1f}" y2="{h}" stroke="{INK}" stroke-dasharray="4 3"/>'  # under the labels
+                      f'<text x="{rx:.1f}" y="12" text-anchor="middle" fill="{INK}">{escape(ref_label)}</text>')
     return _svg(h, title, "".join(out))
 
 
@@ -71,3 +73,41 @@ def stacked_bar(parts, title=""):
         x += w
     h = 34 + ((len(parts) + 2) // 3) * 18
     return _svg(h, title, "".join(segs) + "".join(legend))
+
+
+def priority_strip(rows, title=""):
+    """One tile per level. An empty level gets a gray band, so only levels with findings carry color."""
+    gap, tile_h = 8, 80
+    w = (W - gap * (len(rows) - 1)) / len(rows)
+    out = []
+    for i, r in enumerate(rows):
+        x, n = i * (w + gap), r["count"]
+        band = SEVERITY_COLORS[r["level"]] if n else "#d0d0d0"
+        name, action = escape(str(r["name"])), escape(str(r["action"]))
+        out.append(f'<g><title>{escape(r["level"])} {name}: {n} finding(s). {action}</title>'
+                   f'<rect x="{x:.1f}" y="0" width="{w:.1f}" height="{tile_h}" fill="#f7f7f7"/>'
+                   f'<rect x="{x:.1f}" y="0" width="{w:.1f}" height="6" fill="{band}"/>'
+                   f'<text x="{x + 8:.1f}" y="24" fill="{INK}" font-weight="600">{escape(r["level"])} {name}</text>'
+                   f'<text x="{x + 8:.1f}" y="52" fill="{INK if n else NEUTRAL}" font-size="24" font-weight="600">{n}</text>'
+                   f'<text x="{x + 8:.1f}" y="71" fill="{INK}" font-size="11">{action}</text></g>')
+    return _svg(tile_h, title, "".join(out))
+
+
+def domain_grid(rows, title=""):
+    """Rows = areas, columns = levels. The count is always printed, so color is never the only cue."""
+    if not rows:
+        return _svg(ROW, title, f'<text x="4" y="18" fill="{INK}">no data</text>')
+    cw, top = (W - LABEL_W) / len(SEVERITY_COLORS), 20
+    out = [f'<text x="{LABEL_W + (c + .5) * cw:.1f}" y="14" text-anchor="middle" fill="{INK}" font-weight="600">{p}</text>'
+           for c, p in enumerate(SEVERITY_COLORS)]
+    for i, r in enumerate(rows):
+        y, label = top + i * ROW, str(r["label"])
+        out.append(f'<text x="{LABEL_W - 6}" y="{y + 18}" text-anchor="end" fill="{INK}">{escape(_cut(label, 30))}<title>{escape(label)}</title></text>')
+        for c, (p, col) in enumerate(SEVERITY_COLORS.items()):
+            n, x = r["counts"].get(p, 0), LABEL_W + c * cw
+            fill = f'fill="{col}" fill-opacity="0.25"' if n else 'fill="#f3f3f3"'
+            out.append(f'<g><title>{escape(label)}, {p}: {n} finding(s)</title>'
+                       f'<rect x="{x + 1:.1f}" y="{y + 1}" width="{cw - 2:.1f}" height="{ROW - 2}" {fill}/>'
+                       + (f'<text x="{x + cw / 2:.1f}" y="{y + 19}" text-anchor="middle" fill="{INK}" font-weight="600">{n}</text>' if n else "")
+                       + '</g>')
+    return _svg(top + len(rows) * ROW, title, "".join(out))

@@ -34,8 +34,8 @@ def test_header_line(rendered, sample_meta):
     assert f"DB: {m['db_name']} (DBID {m['dbid']}) | Instance 1 (single instance) | 19.0.0.0.0 | CDB: NO" in rendered[0]
 
 
-def test_five_charts(rendered):
-    assert rendered[1].count("<svg") == 5 and "RAC comparison not available" in rendered[1]
+def test_all_charts(rendered):
+    assert rendered[1].count("<svg") == 9 and "RAC comparison not available" in rendered[1]
 
 
 def test_no_external_refs(rendered):
@@ -198,3 +198,67 @@ def test_hypothesis_label_not_doubled(good_run):
     _edit(good_run, "interpretation.json", lambda d: d["findings"]["F01"].__setitem__("hypothesis", "Hypothesis: reads are many."))
     md, _ = render(good_run, "both")
     assert "Hypothesis: reads are many." in md and "Hypothesis: Hypothesis" not in md
+
+
+# ---- priority explanation and data sources ------------------------------------------------------
+
+def test_every_default_rule_has_a_plain_condition(cfg):
+    from render_report import _cond
+    for rid in cfg["thresholds"]["rules"]:
+        assert _cond(rid, cfg["thresholds"], "san"), rid
+
+
+def test_condition_uses_loaded_thresholds_and_storage(cfg):
+    import copy
+    from render_report import _cond
+    c = copy.deepcopy(cfg["thresholds"])
+    c["rules"]["cpu.load.p0"]["load_ratio_min"] = 3.5
+    assert "3.5" in _cond("cpu.load.p0", c, "san")
+    assert "8 ms" in _cond("io.seq_read.crit", c, "flash") and "20 ms" in _cond("io.seq_read.crit", c, "san")
+
+
+def test_priority_block_for_every_audience(good_run):
+    for aud in ("user", "dba", "both"):
+        md, html = render(good_run, aud)
+        assert "### How priority is set" in md and "<h3>How priority is set</h3>" in html
+        assert "| P0 | Critical |" in md and "cpu.load.p0" not in md.split("### How priority is set")[1].split("### Findings, most urgent first")[0]
+        assert md.count("- Why this priority: ") == len(read_json(good_run / "findings.json")["findings"])
+        assert "Found in AWR section: " in md
+
+
+def test_priority_strip_on_top_for_dba_too(good_run):
+    assert render(good_run, "both")[1].index("Findings by priority") < render(good_run, "both")[1].index("<h2>Database and period</h2>")
+    dba = render(good_run, "dba")[1]
+    assert dba.index("Findings by priority") > dba.index("<h2>Findings</h2>")
+
+
+def test_chart_captions_html_only(rendered):
+    md, html = rendered
+    assert html.count('<ul class="cap">') == html.count("<svg")
+    assert "SQL ordered by Elapsed Time" in md and "bars" not in md.lower().split("## appendix")[0]
+
+
+def test_host_cpu_bars_are_not_stacked(good_run):
+    # %WIO overlaps %Idle in AWR, so the values do not add up to 100 and must not be stacked
+    html = render(good_run, "both")[1]
+    svg_ = next(s for s in re.findall(r"<svg.*?</svg>", html, re.S) if "Host CPU use" in s)
+    assert 'class="seg"' not in svg_
+
+
+def test_optional_charts_skipped_without_data(good_run):
+    _edit(good_run, "awr.json", lambda d: (d.__setitem__("efficiency", {}), d.__setitem__("host_cpu", {})))
+    html = render(good_run, "both")[1]
+    assert "Host CPU use" not in html and "Efficiency ratios" not in html
+
+
+def test_sources_table_marks_missing_sections(good_run):
+    _edit(good_run, "awr.json", lambda d: d.__setitem__("missing_sections", [{"section": "time_model", "reason": "table not found"}]))
+    md, html = render(good_run, "both")
+    row = next(l for l in md.splitlines() if l.startswith("| Load health | Time Model Statistics"))
+    assert "not in this AWR file" in row
+    assert "<h3>Where this report gets its data</h3>" in html
+
+
+def test_evidence_labels_are_real_awr_titles(sample_run):
+    secs = {e["section"] for f in read_json(sample_run / "findings.json")["findings"] for e in f["evidence"]}
+    assert not secs & {"Load", "OS Detail", "OS Statistics", "Thread Activity", "Instance Efficiency", "Init.ora Parameters", "SGA Target Advice"}

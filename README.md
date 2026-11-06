@@ -55,6 +55,14 @@ All four are load-based, so they can be lowered:
 
 Every threshold lives in `oracle-awr-analyzer/references/thresholds.yaml` and can be overridden per environment. Each finding lists the rule ids that triggered it (`triggered_by`). If a severity was capped or raised, the finding also says why (`severity_adjustments`). For example, a wait event with a high share of DB time but healthy latency is capped at P2 as "a volume problem, not storage".
 
+## Reading the report
+
+The report is written so that someone who is not a DBA can follow it:
+
+- **Priority at a glance:** a P0–P4 strip with finding counts at the top, and a grid showing which area of the system each finding is about.
+- **How priority is set:** the Findings section explains the levels, the P0 conditions and the adjustments, using the thresholds of that run. Each finding has a "Why this priority" line that compares the rule's limit with the measured value.
+- **Where the numbers come from:** every chart, table and finding names its AWR section by its exact title, so you can search for it in the AWR file. The appendix lists every section used and marks the ones missing from that file. Charts and their captions are in the HTML report only.
+
 ## How it works
 
 ```
