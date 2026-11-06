@@ -178,13 +178,13 @@ def rules_cpu(awr, L, t, storage):
     if L["basis"] == "peak" and L["peak"].get("os_idle_pct") is not None:  # peak window: idle from its OS Detail row
         k = next(i for i, r in enumerate(awr["os_detail"]) if r["snap_time"] >= L["peak"]["end"])
         idle = L["peak"]["os_idle_pct"]
-        idle_ev = _ev("Host idle % (peak window)", idle, "OS Detail", f"os_detail[{k}].idle_pct")
+        idle_ev = _ev("Host idle % (peak window)", idle, "Operating System Statistics - Detail", f"os_detail[{k}].idle_pct")
     if ratio is not None:
         d["aas"], d["load_ratio"] = basis["aas"], ratio
         rid = idle is not None and _tier(t, ["cpu.load.p0", "cpu.load.p1"], lambda r: ratio >= r["load_ratio_min"] and idle < r["host_idle_max_pct"])
         if rid:
             out.append(_cand("cpu", "host cpu", "Host CPU is saturated", rid, t,
-                             [_ev("Load ratio (AAS / CPUs)", ratio, "Load", "derived.load_ratio"), idle_ev]))
+                             [_ev("Load ratio (AAS / CPUs)", ratio, "Top ADDM Findings by Average Active Sessions, CPUs from the report header (calculated by this tool)" if L["basis"] == "peak" else "DB Time, Elapsed and CPUs from the report header (calculated by this tool)", "derived.load_ratio"), idle_ev]))
     r = t["rules"]["cpu.resmgr.p2"]
     i, e = _find(awr, t, r["event"])
     if e and _pct(e) >= r["pct_min"]:
@@ -201,7 +201,7 @@ def rules_memory(awr, L, t, storage):
         d["swap_out_mb_per_hour"] = rate = round(v / 1048576 / (elapsed / 60), 2)
         rid = "mem.swap.p1" if rate >= t["swap_out_mb_per_hour"] else "mem.swap.p3"
         out.append(_cand("memory", "swap", "Memory is being swapped out", rid, t,
-                         [_ev("Swap-out (MB/h)", rate, "OS Statistics", "derived.swap_out_mb_per_hour")]))
+                         [_ev("Swap-out (MB/h)", rate, "Operating System Statistics", "derived.swap_out_mb_per_hour")]))
     pct = ((awr.get("memory") or {}).get("pct_host_mem_used_for_sga_pga") or {}).get("end")
     if pct is not None and pct > t["rules"]["mem.sga_pga.p2"]["pct_gt"]:
         out.append(_cand("memory", "sga+pga", "SGA and PGA use most host memory", "mem.sga_pga.p2", t,
@@ -223,7 +223,7 @@ def rules_redo(awr, L, t, storage):
     rid = sw is not None and _tier(t, ["redo.switch.crit", "redo.switch.warn"], lambda r: sw > r["per_hour_gt"])
     if rid:
         out.append(_cand("redo", "log switches", "Redo logs switch too often", rid, t,
-                         [_ev("Log switches per hour", sw, "Thread Activity", "thread_activity.log_switches_per_hour")]))
+                         [_ev("Log switches per hour", sw, "Instance Activity Stats - Thread Activity", "thread_activity.log_switches_per_hour")]))
     r = t["rules"]["redo.ckpt.p1"]
     i, e = _find(awr, t, r["event"])
     if e and _pct(e) >= r["pct_min"]:
@@ -240,7 +240,7 @@ def rules_parse(awr, L, t, storage):
     rid = soft is not None and _tier(t, ["parse.soft.crit", "parse.soft.warn"], lambda r: soft < r["pct_lt"])
     if rid:
         out.append(_cand("parse", "soft parse", "Too many hard parses", rid, t,
-                         [_ev("Soft parse %", soft, "Instance Efficiency", "efficiency.soft_parse_pct")]))
+                         [_ev("Soft parse %", soft, "Instance Efficiency Percentages (Target 100%)", "efficiency.soft_parse_pct")]))
     rate = ((awr.get("load_profile") or {}).get("hard_parses_sql") or {}).get("per_s")
     if rate is not None and rate >= t["rules"]["parse.hard_rate.p2"]["per_s_min"]:
         out.append(_cand("parse", "hard parse rate", "Hard parse rate is very high", "parse.hard_rate.p2", t,
@@ -251,8 +251,8 @@ def rules_parse(awr, L, t, storage):
     r = t["rules"]["parse.exec_to_parse.p3"]
     if ex is not None and soft is not None and ex < r["exec_lt"] and soft > r["soft_gt"]:
         out.append(_cand("parse", "execute to parse", "Cursors are not reused between executions", "parse.exec_to_parse.p3", t,
-                         [_ev("Execute to parse %", ex, "Instance Efficiency", "efficiency.execute_to_parse_pct"),
-                          _ev("Soft parse %", soft, "Instance Efficiency", "efficiency.soft_parse_pct")]))
+                         [_ev("Execute to parse %", ex, "Instance Efficiency Percentages (Target 100%)", "efficiency.execute_to_parse_pct"),
+                          _ev("Soft parse %", soft, "Instance Efficiency Percentages (Target 100%)", "efficiency.soft_parse_pct")]))
     return out
 
 
@@ -315,7 +315,7 @@ def rules_config(awr, L, t, storage):
         if name.startswith("_") or name in t["watch_params"]:  # section lists only non-default params
             side = "end" if v.get("end") else "begin"
             out.append(_cand("config", name, f"Parameter {name} is set", "config.param.p4", t,
-                             [_ev("Value", v[side], "Init.ora Parameters", f"parameters.{name}.{side}")]))
+                             [_ev("Value", v[side], "Modified Parameters", f"parameters.{name}.{side}")]))
     rows = (awr.get("advisories") or {}).get("sga_target") or []
     r = t["rules"]["config.sga_advisory.p4"]
     cur = next((x for x in rows if x["sga_size_factor"] == 1), None)
@@ -323,7 +323,7 @@ def rules_config(awr, L, t, storage):
         for i, x in enumerate(rows):
             if x["sga_size_factor"] > r["factor_gt"] and x["est_db_time_s"] <= r["db_time_ratio_max"] * cur["est_db_time_s"]:
                 out.append(_cand("config", "sga advisory", "A larger SGA would cut database time", "config.sga_advisory.p4", t,
-                                 [_ev("Estimated DB time (s)", x["est_db_time_s"], "SGA Target Advice",
+                                 [_ev("Estimated DB time (s)", x["est_db_time_s"], "SGA Target Advisory",
                                       f"advisories.sga_target[{i}].est_db_time_s")]))
                 break
     return out
