@@ -78,7 +78,7 @@ AWR.html ─parse_awr.py─▶ awr.json ─classify_sql.py─▶ awr.json (+SQL 
                        awr_diff_sql.py  ─▶ awr_diff_<db>.sql (only if suggested)
 ```
 
-**Scripts compute every number; the AI only interprets.** The agents never read the raw HTML. They write the plain-language text (facts, hypothesis, user impact, recommendation) into `interpretation.json`. In Claude Code the work is split among a small team: `team.py plan` groups findings by severity, one writer agent per group writes its part, a second, fresh agent reviews it, and `team.py merge` combines the parts. A failed review gets one rewrite; if it still fails, that entry uses standard text and the reply says so.
+**Scripts compute every number; the AI only interprets.** The agents never read the raw HTML. They write the plain-language text (facts, hypothesis, user impact, recommendation) into `interpretation.json`. In Claude Code the work is split among a small team: `team.py plan` groups findings by severity (and copies the rules into `team_refs/` in the run folder for the agents to read), one writer agent per group writes its part, a second, fresh agent reviews it, and `team.py merge` combines the parts. A failed review gets one rewrite; if it still fails, that entry uses standard text and the reply says so.
 
 | Findings | Writer | Reviewer | Rewrite |
 |---|---|---|---|

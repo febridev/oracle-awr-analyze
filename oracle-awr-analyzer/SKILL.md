@@ -33,21 +33,25 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
 4. Interpret with a team of agents. Start by running (it deletes old `interpretation.json`, part and rewrite files in `RUN`):
    `python3 <skill>/scripts/team.py plan RUN` -> `RUN/team_plan.json`, a list of `groups`, each with `writer_model`,
    `verifier_model`, `rewrite_model`, `findings` (ids), `summary` (true for one group) and `part` (its output file).
+   It also copies `SKILL.md` and `references/wait_events.md` into `RUN/team_refs/`, because agents cannot read plugin paths.
+   Agent prompts give `RUN` (absolute), never `<skill>`. `RUN` must be under the working folder, since background agents
+   cannot ask for access to other paths.
    If the Agent tool is absent or `oracle-awr-analyzer:awr-writer` is not listed, use the single-agent fallback below.
    - Writers: start one `oracle-awr-analyzer:awr-writer` per group, all in parallel, with `model` set to `writer_model`.
-     The agents start cold, so each prompt must give the absolute `<skill>` path, `RUN`, the ids, whether to write the
+     The agents start cold, so each prompt must give the absolute `RUN`, the ids, whether to write the
      summary, and the output file `RUN/<part>`. Description format: `<writer|verifier|rewriter> <model>: <severity range>[ + summary]`,
      for example `writer opus: P0-P1 + summary`. Never put database names, hosts or SQL in a description.
    - Verifiers: once all writers finish, start one `oracle-awr-analyzer:awr-verifier` per group in parallel, with
-     `model` set to `verifier_model`, the ids and the part file. The group with `summary: true` also gets every part file.
+     `model` set to `verifier_model`, `RUN`, the ids and the part file. The group with `summary: true` also gets every part file.
      Each ends with `VERDICT: PASS` or `VERDICT: FAIL <ids>`; a missing `VERDICT:` line counts as FAIL for that group.
    - Rewrites: for each failed id, start one fresh `awr-writer` per group on `rewrite_model`, given the reviewer's reasons and
      the output file `RUN/interpretation.rewrite-<n>.json` (`n` unique per rewrite, so the file name never repeats).
-     Then verify the rewrite again, once.
+     Set the summary flag when `SUMMARY` failed. Then verify again, once: the re-verify prompt names the rewrite file as the
+     text to judge (the summary group also gets the rewrite files, besides every part file).
    - Merge: ids that still fail go to `python3 <skill>/scripts/team.py merge RUN --drop <ids>` (RUN first; `--drop` takes
      every argument after it; `SUMMARY` is a valid id). If nothing failed, run merge with no `--drop`. It writes
      `RUN/interpretation.json` and prints `WARN` lines. Exit 2 is a problem to fix (message on stderr), not to skip.
-   - If a model cannot be spawned or a writer fails, write that group yourself under the same rules, save it as that
+   - If a model cannot be spawned, a writer fails or a writer replies `BLOCKED:`, write that group yourself under the same rules, save it as that
      group's part file, and verify it as usual.
 
    Single-agent fallback: read `RUN/findings.json` and `<skill>/references/wait_events.md`. Write `RUN/interpretation.json`

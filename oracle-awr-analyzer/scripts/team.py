@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
 from pathlib import Path
 
-from common import read_json, write_json
+from common import SKILL_DIR, read_json, write_json
 
 # severity -> writer; writer -> (verifier, rewrite). Groups are ordered opus, sonnet, haiku.
 WRITER = {"P0": "opus", "P1": "opus", "P2": "sonnet", "P3": "haiku", "P4": "haiku"}
@@ -94,6 +95,10 @@ def main(argv=None) -> int:
             for p in run.glob(pat):
                 p.unlink()
         write_json(run / "team_plan.json", result)
+        # agents cannot read plugin paths outside the working folder, so give them copies of the rules
+        (run / "team_refs").mkdir(exist_ok=True)
+        shutil.copy(SKILL_DIR / "SKILL.md", run / "team_refs" / "SKILL.md")
+        shutil.copy(SKILL_DIR / "references" / "wait_events.md", run / "team_refs" / "wait_events.md")
     except (OSError, ValueError, KeyError, AttributeError, TypeError) as ex:
         print(f"error: {ex}", file=sys.stderr)
         return 2

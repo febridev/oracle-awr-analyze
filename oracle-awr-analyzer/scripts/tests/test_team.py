@@ -59,6 +59,13 @@ def test_plan_clears_stale_outputs(tmp_path):
     assert team.main(["plan", str(run)]) == 0
     assert not any((run / n).exists() for n in stale) and (run / "findings.json").exists()
 
+def test_plan_copies_rules_and_keeps_them(tmp_path):
+    run = fixture_run(tmp_path, "io_bound")
+    for _ in range(2):  # a rerun overwrites and the stale clearing leaves team_refs alone
+        assert team.main(["plan", str(run)]) == 0
+    for src, dst in [("SKILL.md", "SKILL.md"), ("references/wait_events.md", "wait_events.md")]:
+        assert (run / "team_refs" / dst).read_bytes() == (team.SKILL_DIR / src).read_bytes()
+
 def test_cli_plan_missing_findings_exits_2(tmp_path, capsys):
     assert team.main(["plan", str(tmp_path)]) == 2
     assert "error:" in capsys.readouterr().err

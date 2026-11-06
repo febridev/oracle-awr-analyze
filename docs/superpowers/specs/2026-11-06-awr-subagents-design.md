@@ -77,6 +77,8 @@ Two commands, in the same CLI style and with the same exit codes as the other sc
 }
 ```
 
+`plan` also copies `SKILL.md` and `references/wait_events.md` into `RUN/team_refs/` (agents cannot read plugin paths outside the working folder). Agents read their rules only from there.
+
 `team.py merge RUN [--drop ID ...]` builds `RUN/interpretation.json`:
 
 - Reads each group's part file, then `interpretation.rewrite-<n>.json` files in numeric order. A later entry replaces an earlier one.
@@ -88,13 +90,13 @@ Two commands, in the same CLI style and with the same exit codes as the other sc
 
 - Tools: `Read`, `Write`. Default model: `sonnet`.
 - Writes only the part or rewrite file named in its prompt.
-- Reads `findings.json` and `references/wait_events.md`. Never reads the raw AWR HTML.
-- Follows the `interpretation.json` rules in `SKILL.md`.
+- Reads `RUN/findings.json` and `RUN/team_refs/wait_events.md`. Never reads the raw AWR HTML.
+- Follows the `interpretation.json` rules in `RUN/team_refs/SKILL.md`. If a required file cannot be read it writes nothing and replies `BLOCKED: <file>`.
 
 ### `oracle-awr-analyzer/agents/awr-verifier.md`
 
 - Tools: `Read` only, so it cannot edit what it reviews. Default model: `sonnet`.
-- Checks the "You must self-check" list in `SKILL.md`, and that each claim in `facts` traces to the finding's evidence.
+- Checks the "You must self-check" list in `RUN/team_refs/SKILL.md`, and that each claim in `facts` traces to the finding's evidence.
 - Does not repeat the number checks that `validate_findings.py` enforces.
 - The final line of its answer is exactly `VERDICT: PASS` or `VERDICT: FAIL <ids>`, where ids may include `SUMMARY`. Reasons go above that line.
 
@@ -130,6 +132,7 @@ Both follow the mod's existing rule that a failure in the view never affects the
 | Verifier answer has no `VERDICT:` line | Treated as FAIL |
 | Validator `ERROR` lines | A writer on that group's rewrite model fixes only those fields in a new rewrite file, then merge and validate rerun. The existing limit of 3 attempts still applies. These fixes are not re-verified |
 | Agent tool absent, or `oracle-awr-analyzer:awr-writer` not listed | Single-agent step 4, as today |
+| `RUN` outside the working folder (agents are denied the files, writer replies `BLOCKED:`) | Treated as a failed writer, next row |
 | A model cannot be spawned, or a writer fails | The lead writes that group itself under the single-agent rules, and a verifier still checks it |
 | Session forces one model on all subagents | Accepted. Routing has no effect, and the workflow still runs |
 

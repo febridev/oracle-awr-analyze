@@ -37,3 +37,10 @@ def test_skill_md_team_workflow_and_fallback():
 
 def test_plugin_has_no_manifest_or_hooks():
     assert not (SKILL_DIR / ".claude-plugin").exists() and not (SKILL_DIR / "hooks").exists()
+
+
+def test_agents_read_rules_from_team_refs():
+    for n in ("awr-writer", "awr-verifier"):
+        t = (SKILL_DIR / "agents" / f"{n}.md").read_text()
+        assert "RUN/team_refs/" in t and "<skill>" not in t
+    assert "team_refs" in (SKILL_DIR / "SKILL.md").read_text()
