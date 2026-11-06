@@ -30,13 +30,36 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
      "since the deploy", "last week it was fast").
    - Pass `--config FILE` if the user gave one or a YAML sits next to the AWR file (see Config).
    - Writes `findings.json`.
-4. Interpret. Read `RUN/findings.json` and `<skill>/references/wait_events.md`. Write `RUN/interpretation.json`
+4. Interpret with a team of agents. Start by running (it deletes old `interpretation.json`, part and rewrite files in `RUN`):
+   `python3 <skill>/scripts/team.py plan RUN` -> `RUN/team_plan.json`, a list of `groups`, each with `writer_model`,
+   `verifier_model`, `rewrite_model`, `findings` (ids), `summary` (true for one group) and `part` (its output file).
+   If the Agent tool is absent or `oracle-awr-analyzer:awr-writer` is not listed, use the single-agent fallback below.
+   - Writers: start one `oracle-awr-analyzer:awr-writer` per group, all in parallel, with `model` set to `writer_model`.
+     The agents start cold, so each prompt must give the absolute `<skill>` path, `RUN`, the ids, whether to write the
+     summary, and the output file `RUN/<part>`. Description format: `<writer|verifier|rewriter> <model>: <severity range>[ + summary]`,
+     for example `writer opus: P0-P1 + summary`. Never put database names, hosts or SQL in a description.
+   - Verifiers: once all writers finish, start one `oracle-awr-analyzer:awr-verifier` per group in parallel, with
+     `model` set to `verifier_model`, the ids and the part file. The group with `summary: true` also gets every part file.
+     Each ends with `VERDICT: PASS` or `VERDICT: FAIL <ids>`; a missing `VERDICT:` line counts as FAIL for that group.
+   - Rewrites: for each failed id, start one fresh `awr-writer` per group on `rewrite_model`, given the reviewer's reasons and
+     the output file `RUN/interpretation.rewrite-<n>.json` (`n` unique per rewrite, so the file name never repeats).
+     Then verify the rewrite again, once.
+   - Merge: ids that still fail go to `python3 <skill>/scripts/team.py merge RUN --drop <ids>` (RUN first; `--drop` takes
+     every argument after it; `SUMMARY` is a valid id). If nothing failed, run merge with no `--drop`. It writes
+     `RUN/interpretation.json` and prints `WARN` lines. Exit 2 is a problem to fix (message on stderr), not to skip.
+   - If a model cannot be spawned or a writer fails, write that group yourself under the same rules, save it as that
+     group's part file, and verify it as usual.
+
+   Single-agent fallback: read `RUN/findings.json` and `<skill>/references/wait_events.md`. Write `RUN/interpretation.json`
    (schema and rules below). Do not read the raw AWR HTML.
 5. Validate, then lint (both must exit 0):
    `python3 <skill>/scripts/validate_findings.py RUN`
    `python3 <skill>/scripts/lint_verify_sql.py --run RUN`
    `validate_findings` prints `ERROR <finding>.<field>: ...` lines; fix exactly those and rerun. At most 3 attempts; after 3 failed attempts, render anyway - findings whose
    interpretation is rejected use the standard text.
+   With the team: send the `ERROR` lines to an `awr-writer` on that group's `rewrite_model`, writing a new
+   `interpretation.rewrite-<n>.json` with only the fixed ids, then rerun `team.py merge RUN` with the same `--drop`
+   and validate again. These fixes count toward the 3 attempts and are not re-verified.
    `WARN` lines are not failures. If `lint_verify_sql` reports a problem in the catalog itself (not in `RUN`),
    that is a skill bug: stop and report it, do not edit the SQL files to get past it.
 6. Render: `python3 <skill>/scripts/render_report.py RUN [--config FILE]` -> `RUN/report.md`, `RUN/report.html`
@@ -45,6 +68,7 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
    has `diff.suggested`; otherwise it prints "diff not suggested" (the reasons are in `findings.json` `diff`). Version signatures live in `<skill>/references/awr_diff.md`.
 8. Reply to the user with the executive summary (max 5 lines), the highest-severity findings by id and title,
    and the paths to `report.html`, `report.md`, `findings.json` and the diff script if written.
+   Name any entries dropped with `--drop` and say they use standard text.
    Mention warnings from `findings.json` (`notes`, load status, comparison warnings) briefly. Relay the report's
    bottleneck sentence and, when a peak exists, its "run an hourly AWR for <peak window>" recommendation.
 
