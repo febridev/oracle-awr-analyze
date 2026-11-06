@@ -81,9 +81,9 @@ Two commands, in the same CLI style and with the same exit codes as the other sc
 
 `team.py merge RUN [--drop ID ...]` builds `RUN/interpretation.json`:
 
-- Reads each group's part file, then `interpretation.rewrite-<n>.json` files in numeric order. A later entry replaces an earlier one.
+- Reads each group's part file, then `interpretation.rewrite-<n>.json` files in numeric order. A later entry replaces an earlier one, so every entry must carry all six fields; a fix writes the complete entry, changing only the fields in question.
 - `ID` is a finding id or `SUMMARY`. A dropped entry is left out, so the renderer uses its existing standard text (`_finding` fallback, `_summary`).
-- Exit 2, naming the file, on invalid JSON, a finding id outside that file's group, or `executive_summary` in a part whose group has `summary: false`.
+- Exit 2, naming the file, on invalid JSON, a finding entry missing any of the six fields, a finding id outside that file's group, or `executive_summary` in a part whose group has `summary: false`.
 - A missing part file is a `WARN` line, not an error. Its findings fall back to standard text.
 
 ### `oracle-awr-analyzer/agents/awr-writer.md`
@@ -129,11 +129,12 @@ Both follow the mod's existing rule that a failure in the view never affects the
 |---|---|
 | Verifier returns FAIL | One rewrite by a fresh writer on the rewrite model, then one re-verify |
 | Still FAIL after the rewrite | `--drop` the entry. Report uses standard text, and the final reply names it |
-| Verifier answer has no `VERDICT:` line | Treated as FAIL |
-| Validator `ERROR` lines | A writer on that group's rewrite model fixes only those fields in a new rewrite file, then merge and validate rerun. The existing limit of 3 attempts still applies. These fixes are not re-verified |
+| Verifier answer has neither a `VERDICT:` nor a `BLOCKED:` line | Treated as FAIL |
+| Validator `ERROR` lines | A writer on that group's rewrite model fixes only those fields, writing the complete entry, in a new rewrite file, then merge and validate rerun. The existing limit of 3 attempts still applies. These fixes are not re-verified |
 | Agent tool absent, or `oracle-awr-analyzer:awr-writer` not listed | Single-agent step 4, as today |
-| `RUN` outside the working folder (agents are denied the files, writer replies `BLOCKED:`) | Treated as a failed writer, next row |
-| A model cannot be spawned, or a writer fails | The lead writes that group itself under the single-agent rules, and a verifier still checks it |
+| `RUN` outside the working folder | Single-agent fallback (agents would be denied the files) |
+| A verifier cannot be spawned, or replies `BLOCKED: <file>` with no `VERDICT:` | Not a rejection: keep the text, skip rewrite and drop, and the final reply names those entries as unverified |
+| A model cannot be spawned, or a writer fails | The lead writes that group itself under the single-agent rules, and a verifier checks it unless that verifier is itself unavailable (then unverified, previous row) |
 | Session forces one model on all subagents | Accepted. Routing has no effect, and the workflow still runs |
 
 ## Trust boundaries

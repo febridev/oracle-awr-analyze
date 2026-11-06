@@ -138,3 +138,19 @@ def test_merged_output_validates_and_dropped_entries_fall_back(tmp_path):
     assert render_report.main([str(run)]) == 0
     md = (run/"report.md").read_text()
     assert "TEAM SUMMARY LINE" not in md and "standard explanation" in md
+
+@pytest.mark.parametrize("name", ["interpretation.part-opus.json", "interpretation.rewrite-1.json"])
+def test_merge_partial_entry_exits_2_and_keeps_output(tmp_path, capsys, name):
+    run = planned(tmp_path, [f("F01","P0")])
+    (run/"interpretation.json").write_text("KEEP")
+    (run/name).write_text(json.dumps({"findings": {"F01": {"facts": "FIXED"}}}))
+    assert team.main(["merge", str(run)]) == 2
+    err = capsys.readouterr().err
+    assert name in err and "F01" in err and "hypothesis" in err and (run/"interpretation.json").read_text() == "KEEP"
+
+def test_merge_rewrite_summary_replaces_part_summary(tmp_path):
+    run = planned(tmp_path, [f("F01","P0")])
+    (run/"interpretation.part-opus.json").write_text(json.dumps({"executive_summary": ["old"], "findings": {"F01": entry()}}))
+    (run/"interpretation.rewrite-1.json").write_text(json.dumps({"executive_summary": ["new"]}))
+    assert team.main(["merge", str(run)]) == 0
+    assert json.loads((run/"interpretation.json").read_text())["executive_summary"] == ["new"]

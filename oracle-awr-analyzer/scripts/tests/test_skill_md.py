@@ -44,3 +44,8 @@ def test_agents_read_rules_from_team_refs():
         t = (SKILL_DIR / "agents" / f"{n}.md").read_text()
         assert "RUN/team_refs/" in t and "<skill>" not in t
     assert "team_refs" in (SKILL_DIR / "SKILL.md").read_text()
+
+
+def test_verifier_blocked_is_not_a_rejection():
+    assert "BLOCKED:" in (SKILL_DIR / "agents/awr-verifier.md").read_text()
+    assert "unverified" in (SKILL_DIR / "SKILL.md").read_text()

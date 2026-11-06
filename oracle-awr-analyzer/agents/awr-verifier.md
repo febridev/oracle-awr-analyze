@@ -15,4 +15,4 @@ includes the executive summary, every part file.
 4. Do not repeat the validator's number checks. Do not rewrite or change anything. Never read the raw AWR HTML.
 5. State the reasons for each problem by id. Then end with a final line that is exactly `VERDICT: PASS` or
    `VERDICT: FAIL <ids>` (space-separated; the id `SUMMARY` stands for the executive summary). Nothing after that line.
-6. If a required file cannot be read, do not guess: end with `VERDICT: FAIL <ids>` and name the file as the reason.
+6. If a required file cannot be read, do not guess and give no `VERDICT:` line: end with a final line `BLOCKED: <file>`.

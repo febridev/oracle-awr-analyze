@@ -12,6 +12,7 @@ from common import SKILL_DIR, read_json, write_json
 # severity -> writer; writer -> (verifier, rewrite). Groups are ordered opus, sonnet, haiku.
 WRITER = {"P0": "opus", "P1": "opus", "P2": "sonnet", "P3": "haiku", "P4": "haiku"}
 REVIEW = {"opus": ("opus", "opus"), "sonnet": ("sonnet", "opus"), "haiku": ("sonnet", "sonnet")}
+FIELDS = ("facts", "hypothesis", "user_impact", "recommendation", "change_risk", "approval_required")
 STALE = ("interpretation.json", "interpretation.part-*.json", "interpretation.rewrite-*.json")
 
 
@@ -38,6 +39,10 @@ def _load(run: Path, name: str, ids: set[str], summary: bool) -> dict:
     for fid in d.get("findings", {}):
         if fid not in ids:
             raise ValueError(f"{name}: finding {fid} is not allowed here")
+    for fid, e in d.get("findings", {}).items():
+        miss = [k for k in FIELDS if not isinstance(e, dict) or k not in e]
+        if miss:  # a partial entry would silently wipe the other fields of the earlier text
+            raise ValueError(f"{name}: finding {fid} is missing {', '.join(miss)}")
     if "executive_summary" in d and not summary:
         raise ValueError(f"{name}: executive_summary is not allowed here")
     return d
@@ -97,8 +102,8 @@ def main(argv=None) -> int:
         write_json(run / "team_plan.json", result)
         # agents cannot read plugin paths outside the working folder, so give them copies of the rules
         (run / "team_refs").mkdir(exist_ok=True)
-        shutil.copy(SKILL_DIR / "SKILL.md", run / "team_refs" / "SKILL.md")
-        shutil.copy(SKILL_DIR / "references" / "wait_events.md", run / "team_refs" / "wait_events.md")
+        shutil.copyfile(SKILL_DIR / "SKILL.md", run / "team_refs" / "SKILL.md")
+        shutil.copyfile(SKILL_DIR / "references" / "wait_events.md", run / "team_refs" / "wait_events.md")
     except (OSError, ValueError, KeyError, AttributeError, TypeError) as ex:
         print(f"error: {ex}", file=sys.stderr)
         return 2

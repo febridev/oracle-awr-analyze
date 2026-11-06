@@ -5,8 +5,9 @@ description: Analyze an Oracle AWR report (HTML, single instance) and produce a 
 
 # Oracle AWR Analyzer
 
-Scripts compute every number and every severity. Your job is to run them in order, then write the
-plain-language interpretation (`interpretation.json`) that the report shows next to the evidence.
+Scripts compute every number and every severity. Your job is to run them in order, then have the
+plain-language interpretation (`interpretation.json`) written, by the agent team or the single-agent fallback,
+and shown next to the evidence in the report.
 All paths below are relative to this skill folder (`<skill>`). Run everything with `python3`.
 
 ## Setup
@@ -35,7 +36,7 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
    `verifier_model`, `rewrite_model`, `findings` (ids), `summary` (true for one group) and `part` (its output file).
    It also copies `SKILL.md` and `references/wait_events.md` into `RUN/team_refs/`, because agents cannot read plugin paths.
    Agent prompts give `RUN` (absolute), never `<skill>`. `RUN` must be under the working folder, since background agents
-   cannot ask for access to other paths.
+   cannot ask for access to other paths. If `RUN` is not under the working folder, use the single-agent fallback.
    If the Agent tool is absent or `oracle-awr-analyzer:awr-writer` is not listed, use the single-agent fallback below.
    - Writers: start one `oracle-awr-analyzer:awr-writer` per group, all in parallel, with `model` set to `writer_model`.
      The agents start cold, so each prompt must give the absolute `RUN`, the ids, whether to write the
@@ -43,9 +44,12 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
      for example `writer opus: P0-P1 + summary`. Never put database names, hosts or SQL in a description.
    - Verifiers: once all writers finish, start one `oracle-awr-analyzer:awr-verifier` per group in parallel, with
      `model` set to `verifier_model`, `RUN`, the ids and the part file. The group with `summary: true` also gets every part file.
-     Each ends with `VERDICT: PASS` or `VERDICT: FAIL <ids>`; a missing `VERDICT:` line counts as FAIL for that group.
-   - Rewrites: for each failed id, start one fresh `awr-writer` per group on `rewrite_model`, given the reviewer's reasons and
-     the output file `RUN/interpretation.rewrite-<n>.json` (`n` unique per rewrite, so the file name never repeats).
+     Each ends with `VERDICT: PASS` or `VERDICT: FAIL <ids>`; a reply with neither a `VERDICT:` nor a final `BLOCKED:` line counts as FAIL for that group.
+     A verifier that cannot be spawned or replies `BLOCKED:` is not a rejection: keep the text, skip the rewrite and
+     drop, and name those entries as unverified in the step 8 reply.
+   - Rewrites: for each group with failed ids, start one fresh `awr-writer` on `rewrite_model`, given the failed ids, the reviewer's
+     reasons, the file holding the current text (the part file, or the latest rewrite file for those ids; the writer reads it and
+     writes each id's complete six-field entry) and the output file `RUN/interpretation.rewrite-<n>.json` (`n` unique per rewrite, so the file name never repeats).
      Set the summary flag when `SUMMARY` failed. Then verify again, once: the re-verify prompt names the rewrite file as the
      text to judge (the summary group also gets the rewrite files, besides every part file).
    - Merge: ids that still fail go to `python3 <skill>/scripts/team.py merge RUN --drop <ids>` (RUN first; `--drop` takes
@@ -61,8 +65,10 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
    `python3 <skill>/scripts/lint_verify_sql.py --run RUN`
    `validate_findings` prints `ERROR <finding>.<field>: ...` lines; fix exactly those and rerun. At most 3 attempts; after 3 failed attempts, render anyway - findings whose
    interpretation is rejected use the standard text.
+   An `ERROR` on `executive_summary` is fixed the same way, with the summary flag set.
    With the team: send the `ERROR` lines to an `awr-writer` on that group's `rewrite_model`, writing a new
-   `interpretation.rewrite-<n>.json` with only the fixed ids, then rerun `team.py merge RUN` with the same `--drop`
+   `interpretation.rewrite-<n>.json` with the complete entry of each fixed id (the prompt names the file holding the current
+   text; only the fields in the errors change), then rerun `team.py merge RUN` with the same `--drop`
    and validate again. These fixes count toward the 3 attempts and are not re-verified.
    `WARN` lines are not failures. If `lint_verify_sql` reports a problem in the catalog itself (not in `RUN`),
    that is a skill bug: stop and report it, do not edit the SQL files to get past it.
@@ -72,7 +78,8 @@ Let `AWR` be the user's file and `RUN` the run folder printed by step 1.
    has `diff.suggested`; otherwise it prints "diff not suggested" (the reasons are in `findings.json` `diff`). Version signatures live in `<skill>/references/awr_diff.md`.
 8. Reply to the user with the executive summary (max 5 lines), the highest-severity findings by id and title,
    and the paths to `report.html`, `report.md`, `findings.json` and the diff script if written.
-   Name any entries dropped with `--drop` and say they use standard text.
+   Name any entries dropped with `--drop`, entries with a missing part (merge `WARN`) and entries left unverified, and say
+   they use standard text or are unverified. If `SUMMARY` was dropped, use the report's summary.
    Mention warnings from `findings.json` (`notes`, load status, comparison warnings) briefly. Relay the report's
    bottleneck sentence and, when a peak exists, its "run an hourly AWR for <peak window>" recommendation.
 
