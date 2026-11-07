@@ -70,7 +70,7 @@ AWR.html ─parse_awr.py─▶ awr.json ─classify_sql.py─▶ awr.json (+SQL 
                                           │
                        thresholds.yaml ─analyze.py─▶ findings.json
                                                           │
-                              AI agent writes ─▶ interpretation.json
+             team.py plan ─▶ writer agents ─▶ verifier agents ─▶ team.py merge ─▶ interpretation.json
                                                           │
                  validate_findings.py + lint_verify_sql.py (fix and rerun, max 3 times)
                                                           │
@@ -78,11 +78,22 @@ AWR.html ─parse_awr.py─▶ awr.json ─classify_sql.py─▶ awr.json (+SQL 
                        awr_diff_sql.py  ─▶ awr_diff_<db>.sql (only if suggested)
 ```
 
-**Scripts compute every number; the AI only interprets.** The agent never reads the raw HTML. It writes the plain-language text (facts, hypothesis, user impact, recommendation) into `interpretation.json`. A validator then checks that text before anything is rendered:
+Models by severity:
+
+| Findings | Writer | Reviewer | Rewrite |
+|---|---|---|---|
+| P0, P1 | opus | opus | opus |
+| P2 | sonnet | sonnet | opus |
+| P3, P4 | haiku | sonnet | sonnet |
+| Summary only (no findings) | sonnet | sonnet | opus |
+
+**Scripts compute every number; the AI only interprets.** The agents never read the raw HTML. They write the plain-language text (facts, hypothesis, user impact, recommendation) into `interpretation.json`. In Claude Code the work is split among a small team: `team.py plan` groups findings by severity (and copies the rules into `team_refs/` in the run folder for the agents to read), one writer agent per group writes its part, a second, fresh agent reviews it, and `team.py merge` combines the parts. A failed review gets one rewrite; if it still fails, that entry uses standard text and the reply says so. A validator then checks that text before anything is rendered:
 
 - Every number in the prose must come from the finding's evidence or from `awr.json`. Invented numbers are rejected.
 - Causal claims are kept out of `facts` and must be labeled as hypotheses.
 - Executable change commands (`ALTER SYSTEM ...`, `CREATE INDEX ... ON ...`, `GRANT ... TO ...`, and so on) are rejected. Changes are described in words and flagged for change approval.
+
+When subagents are unavailable, including a manual `cp -r` copy to `~/.claude/skills/`, the run falls back to one agent writing everything, and the report is the same kind. The optional "helper desk" mod, which shows the team at work, is not part of this plugin; the report is identical without it.
 
 If the AI's text still fails after three attempts, the report uses standard explanations for those findings. The report is always produced, and it is never wrong.
 
@@ -130,7 +141,7 @@ If they are missing, the skill tells the agent to install them from `requirement
 
 ### Manual install and other agents
 
-- **Claude Code without the plugin system:** copy the skill folder with `cp -r oracle-awr-analyzer ~/.claude/skills/`.
+- **Claude Code without the plugin system:** copy the skill folder with `cp -r oracle-awr-analyzer ~/.claude/skills/`. A manual copy has no subagents, so it uses the single-agent fallback.
 - **Other agents (Antigravity and so on):** the scripts are agent-neutral. Point the agent at `oracle-awr-analyzer/SKILL.md`, which holds the full workflow and rules.
 
 ## Usage
@@ -197,7 +208,8 @@ Set `storage_profile` correctly. Single-block reads warn at 3/8 ms on flash and 
 └── marketplace.json          # makes this repo installable with /plugin
 oracle-awr-analyzer/          # the skill (the plugin's source folder)
 ├── SKILL.md                  # workflow and rules the agent follows
-├── scripts/                  # parse_awr, classify_sql, analyze, validate_findings,
+├── agents/                   # awr-writer and awr-verifier subagents
+├── scripts/                  # parse_awr, classify_sql, analyze, team, validate_findings,
 │   │                         # lint_verify_sql, render_report, svg, awr_diff_sql, common
 │   └── tests/                # pytest suite
 ├── references/
